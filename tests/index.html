@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Retirement Planner Engine Tests</title>
+    <style>
+      body {
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        color: #eaf1f7;
+        background: linear-gradient(165deg, #0a1320, #0d1f31 55%, #07121b);
+      }
+
+      main {
+        max-width: 840px;
+        margin: 0 auto;
+        padding: 2rem 1.2rem 3rem;
+      }
+
+      h1 {
+        margin: 0 0 0.7rem;
+        font-family: Georgia, serif;
+        font-size: 2.2rem;
+        letter-spacing: -0.04em;
+      }
+
+      p {
+        color: #9bb0c4;
+      }
+
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 1.4rem 0 0;
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      li {
+        padding: 1rem 1.1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(185, 209, 229, 0.18);
+        background: rgba(9, 18, 29, 0.85);
+      }
+
+      .pass {
+        border-color: rgba(143, 245, 164, 0.28);
+        background: rgba(24, 53, 38, 0.42);
+      }
+
+      .fail {
+        border-color: rgba(255, 139, 146, 0.28);
+        background: rgba(69, 24, 31, 0.42);
+      }
+    </style>
+  </head>
+  <body>
+    <main id="test-results">
+      <h1>Engine Tests</h1>
+      <p>Loading…</p>
+    </main>
+    <script src="../engine.js"></script>
+    <script src="./tests.js"></script>
+  </body>
+</html>
