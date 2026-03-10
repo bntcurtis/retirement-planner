@@ -11,6 +11,7 @@
     activeTab: 'overview',
     snapshotYear: Engine.CURRENT_YEAR,
     showAllRows: true,
+    chartXMode: 'year',
     transientMessages: [],
   };
 
@@ -474,27 +475,23 @@
       '" height="' +
       ySpan +
       '" fill="transparent"></rect>' +
-      '<text x="' +
-      padding.left +
-      '" y="' +
-      (height - 10) +
-      '" fill="#99aaba" font-size="12">' +
-      escapeHtml(String(yearValues[0])) +
-      '</text>' +
-      '<text x="' +
-      xAt(Math.floor(pointCount / 2)).toFixed(1) +
-      '" y="' +
-      (height - 10) +
-      '" fill="#99aaba" font-size="12" text-anchor="middle">' +
-      escapeHtml(String(yearValues[Math.floor(pointCount / 2)])) +
-      '</text>' +
-      '<text x="' +
-      (width - padding.right) +
-      '" y="' +
-      (height - 10) +
-      '" fill="#99aaba" font-size="12" text-anchor="end">' +
-      escapeHtml(String(yearValues[yearValues.length - 1])) +
-      '</text>' +
+      (function () {
+        var baseProj = projections[1]; // base scenario for age labels
+        var firstRow = baseProj[0];
+        var midRow = baseProj[Math.floor(pointCount / 2)];
+        var lastRow = baseProj[pointCount - 1];
+        var xLabel = state.chartXMode === 'age'
+          ? function (r) { return formatAgeLabel(r); }
+          : function (r) { return String(r.year); };
+        return (
+          '<text x="' + padding.left + '" y="' + (height - 10) +
+          '" fill="#99aaba" font-size="11">' + escapeHtml(xLabel(firstRow)) + '</text>' +
+          '<text x="' + xAt(Math.floor(pointCount / 2)).toFixed(1) + '" y="' + (height - 10) +
+          '" fill="#99aaba" font-size="11" text-anchor="middle">' + escapeHtml(xLabel(midRow)) + '</text>' +
+          '<text x="' + (width - padding.right) + '" y="' + (height - 10) +
+          '" fill="#99aaba" font-size="11" text-anchor="end">' + escapeHtml(xLabel(lastRow)) + '</text>'
+        );
+      })() +
       '</svg>' +
       '</div>'
     );
@@ -534,6 +531,154 @@
         })
         .join('') +
       '</ul>'
+    );
+  }
+
+  function formatAgeLabel(row) {
+    return row.personStates
+      .map(function (ps) { return ps.alive ? String(ps.age) : '—'; })
+      .join(', ');
+  }
+
+  function renderXModeToggle() {
+    return (
+      '<div class="toggle-group">' +
+      '<button type="button" class="toggle-group__btn ' +
+      (state.chartXMode === 'year' ? 'is-active' : '') +
+      '" data-action="set-chart-x-mode" data-mode="year">Year</button>' +
+      '<button type="button" class="toggle-group__btn ' +
+      (state.chartXMode === 'age' ? 'is-active' : '') +
+      '" data-action="set-chart-x-mode" data-mode="age">Age</button>' +
+      '</div>'
+    );
+  }
+
+  function renderIncomeExpenseChart(projection) {
+    var years = projection.slice(0, 45);
+    var width = 960;
+    var height = 260;
+    var pad = { top: 18, right: 26, bottom: 30, left: 78 };
+    var xSpan = width - pad.left - pad.right;
+    var ySpan = height - pad.top - pad.bottom;
+    var barCount = years.length;
+    var barWidth = Math.max(2, xSpan / barCount - 1);
+    var gap = Math.max(0.5, (xSpan - barWidth * barCount) / Math.max(1, barCount - 1));
+
+    // Income components: salary, rental, pension+SS, investment return, retirement withdrawal.
+    function incomeStack(row) {
+      return [
+        Math.max(0, row.salaryIncome),
+        Math.max(0, row.rentalIncome),
+        Math.max(0, row.pensionIncome + row.socialSecurityIncome + row.ubiIncome),
+        Math.max(0, row.liquidInvestmentIncome),
+        Math.max(0, row.retirementWithdrawal),
+      ];
+    }
+
+    var maxIncome = 0;
+    var maxExpense = 0;
+    years.forEach(function (row) {
+      var incomes = incomeStack(row);
+      var totalIncome = incomes.reduce(function (a, b) { return a + b; }, 0);
+      if (totalIncome > maxIncome) { maxIncome = totalIncome; }
+      if (row.totalOutflows > maxExpense) { maxExpense = row.totalOutflows; }
+    });
+    var maxVal = Math.max(maxIncome, maxExpense, 1);
+
+    function barX(index) {
+      return pad.left + index * (barWidth + gap);
+    }
+
+    var incomeColors = ['#34d399', '#22d3ee', '#a78bfa', '#6366f1', '#14b8a6'];
+    var incomeLabels = ['Salary', 'Rental', 'Pension/SS/UBI', 'Investments', 'Retirement wd'];
+
+    var gridValues = [0, 0.25, 0.5, 0.75, 1].map(function (s) {
+      return maxVal * s;
+    });
+
+    var bars = '';
+    years.forEach(function (row, i) {
+      var x = barX(i);
+      var incomes = incomeStack(row);
+      var yCursor = pad.top + ySpan;
+
+      // Stacked income bars.
+      incomes.forEach(function (val, ci) {
+        if (val <= 0) { return; }
+        var barH = (val / maxVal) * ySpan;
+        yCursor -= barH;
+        bars +=
+          '<rect x="' + x.toFixed(1) +
+          '" y="' + yCursor.toFixed(1) +
+          '" width="' + (barWidth * 0.48).toFixed(1) +
+          '" height="' + barH.toFixed(1) +
+          '" fill="' + incomeColors[ci] +
+          '" opacity="0.85" rx="1"></rect>';
+      });
+
+      // Expense bar (right half).
+      var expH = (row.totalOutflows / maxVal) * ySpan;
+      bars +=
+        '<rect x="' + (x + barWidth * 0.52).toFixed(1) +
+        '" y="' + (pad.top + ySpan - expH).toFixed(1) +
+        '" width="' + (barWidth * 0.48).toFixed(1) +
+        '" height="' + expH.toFixed(1) +
+        '" fill="#f43f5e" opacity="0.75" rx="1"></rect>';
+    });
+
+    // X-axis labels (first, middle, last).
+    var first = years[0];
+    var mid = years[Math.floor(barCount / 2)];
+    var last = years[barCount - 1];
+    var xLabel = state.chartXMode === 'age' ? formatAgeLabel : function (r) { return String(r.year); };
+    var xLabels =
+      '<text x="' + pad.left + '" y="' + (height - 8) + '" fill="#99aaba" font-size="11">' +
+      escapeHtml(xLabel(first)) + '</text>' +
+      '<text x="' + barX(Math.floor(barCount / 2)).toFixed(1) + '" y="' + (height - 8) + '" fill="#99aaba" font-size="11" text-anchor="middle">' +
+      escapeHtml(xLabel(mid)) + '</text>' +
+      '<text x="' + (width - pad.right) + '" y="' + (height - 8) + '" fill="#99aaba" font-size="11" text-anchor="end">' +
+      escapeHtml(xLabel(last)) + '</text>';
+
+    var gridLines = gridValues.map(function (val) {
+      var y = pad.top + ((maxVal - val) / maxVal) * ySpan;
+      return (
+        '<line x1="' + pad.left + '" x2="' + (width - pad.right) +
+        '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) +
+        '" stroke="rgba(183,207,227,0.1)" stroke-dasharray="4 6"></line>' +
+        '<text x="' + (pad.left - 10) + '" y="' + (y + 4).toFixed(1) +
+        '" fill="#99aaba" text-anchor="end" font-size="11">' +
+        escapeHtml(Engine.formatShortCurrency(val)) + '</text>'
+      );
+    }).join('');
+
+    var legend = [
+      { label: 'Salary', color: incomeColors[0] },
+      { label: 'Rental', color: incomeColors[1] },
+      { label: 'Pension/SS/UBI', color: incomeColors[2] },
+      { label: 'Investments', color: incomeColors[3] },
+      { label: 'Retirement wd', color: incomeColors[4] },
+      { label: 'Expenses', color: '#f43f5e' },
+    ];
+
+    return (
+      '<div class="income-expense-chart">' +
+      '<div class="chart-header">' +
+      '<div><h3>Income vs. expenses</h3>' +
+      '<p>Stacked annual income sources alongside total outflows (' +
+      escapeHtml(Engine.scenarioDefinitions().find(function (s) { return s.key === state.selectedScenario; }).label) +
+      ' scenario).</p></div>' +
+      renderXModeToggle() +
+      '</div>' +
+      '<div class="chart-legend">' +
+      legend.map(function (item) {
+        return '<span class="legend-chip"><span class="legend-chip__swatch" style="background:' +
+          item.color + '"></span>' + escapeHtml(item.label) + '</span>';
+      }).join('') +
+      '</div>' +
+      '<svg class="ie-chart-svg" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Income versus expenses by year">' +
+      gridLines + bars + xLabels +
+      '</svg>' +
+      '</div>'
     );
   }
 
@@ -626,23 +771,27 @@
       stressDelta +
       '</div>' +
       '<div class="panel chart-card">' +
-      '<div class="section__head">' +
+      '<div class="chart-header">' +
       '<div>' +
       '<h3>Scenario comparison</h3>' +
-      '<p>The chart below reflects any active stress tests as well as the selected scenario assumptions.</p>' +
+      '<p>Net worth and liquid assets with any active stress tests applied.</p>' +
       '</div>' +
+      '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">' +
       (stressDescriptions.length
-        ? '<div class="pill-row">' +
-          stressDescriptions
+        ? stressDescriptions
             .map(function (description) {
               return '<span class="badge badge--rose">' + escapeHtml(description) + '</span>';
             })
-            .join('') +
-          '</div>'
-        : '<span class="badge">No active stress tests</span>') +
+            .join('')
+        : '<span class="badge">No stress</span>') +
+      renderXModeToggle() +
+      '</div>' +
       '</div>' +
       renderScenarioCards(bundle) +
       renderChart(bundle) +
+      '</div>' +
+      '<div class="panel chart-card">' +
+      renderIncomeExpenseChart(selectedScenario.projection) +
       '</div>' +
       '<div class="grid-2">' +
       '<article class="panel panel--padded">' +
@@ -1377,6 +1526,12 @@
       return;
     }
 
+    if (action === 'set-chart-x-mode') {
+      state.chartXMode = actionTarget.dataset.mode;
+      render();
+      return;
+    }
+
     if (action === 'apply-stress-preset') {
       var preset = actionTarget.dataset.preset;
       if (preset === 'clear') {
@@ -1623,7 +1778,7 @@
       '<div class="hero__heading">' +
       '<span class="eyebrow">Static • Private • Browser-only</span>' +
       '<h1>Retirement Planner</h1>' +
-      '<p>Plain HTML, CSS, and JavaScript with tax-free retirement accounts, RMDs at 73, capital gains on property sales, COLA-capped pensions, and event-based stress tests layered on long-run scenarios.</p>' +
+      '<p>Plan your financial future with confidence. Model different scenarios, visualize your trajectory, and stress-test against market shocks.</p>' +
       '<nav class="tab-nav">' +
       '<button type="button" class="tab-button ' +
       (state.activeTab === 'overview' ? 'is-active' : '') +
