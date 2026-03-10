@@ -2,7 +2,9 @@
 
 A static, privacy-first retirement planning app that runs entirely in the browser. There is no build step, no server, and no account. Upload the files to GitHub and GitHub Pages can serve the app directly.
 
-## What changed
+🔗 **[Try it live](https://bntcurtis.github.io/retirement-planner/)**
+
+## What changed from the original (now archived) version
 
 This rewrite deliberately favors simplicity:
 
@@ -13,8 +15,6 @@ This rewrite deliberately favors simplicity:
 - target end ages now stop each person’s cash flows
 - snapshot and data table numbers reconcile to the same engine math
 - stress tests model event-driven shocks separately from long-run scenarios
-
-For a full before-and-after summary, see [CHANGES_FROM_ORIGINAL.md](CHANGES_FROM_ORIGINAL.md).
 
 ## Core ideas
 
