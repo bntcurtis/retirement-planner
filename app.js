@@ -793,12 +793,11 @@
       '<div class="panel chart-card">' +
       renderIncomeExpenseChart(selectedScenario.projection) +
       '</div>' +
-      '<div class="grid-2">' +
       '<article class="panel panel--padded">' +
       '<div class="section__head">' +
       '<div>' +
       '<h3>Stress presets</h3>' +
-      '<p>These are shortcuts. You can fine-tune them in Edit Inputs.</p>' +
+      '<p>Quick ways to layer shocks on top of your scenarios. Fine-tune them in Edit Inputs.</p>' +
       '</div>' +
       '</div>' +
       '<div class="pill-row">' +
@@ -815,21 +814,15 @@
         .join('') +
       '</div>' +
       '</article>' +
-      '<article class="panel panel--padded">' +
-      '<div class="section__head">' +
-      '<div>' +
-      '<h3>Modeling note</h3>' +
-      '<p>Your plan treats changing long-run averages and one-off shocks differently on purpose.</p>' +
+      '<details class="details-block">' +
+      '<summary>How this model works</summary>' +
+      '<div class="details-block__body">' +
+      '<div><strong>Scenarios</strong> — Optimistic, Base, and Pessimistic control average annual investment returns.</div>' +
+      '<div><strong>Stress tests</strong> — Social Security cuts, market crashes, and inflation spikes are overlays because their timing matters more than their long-run average.</div>' +
+      '<div><strong>Tax model</strong> — Retirement accounts are tax-free (Roth-style). Property sale gains use a separate capital gains rate. Pension and UBI COLA is capped at 3%.</div>' +
+      '<div><strong>RMDs</strong> — Required minimum distributions are enforced at age 73 using IRS Uniform Lifetime Table periods, even when cash flow is positive.</div>' +
       '</div>' +
-      '</div>' +
-      '<ul class="notice-list">' +
-      '<li class="notice notice--info"><div><strong>Scenarios</strong><div>Optimistic, Base, and Pessimistic control average annual investment returns while preserving simplicity.</div></div></li>' +
-      '<li class="notice notice--info"><div><strong>Stress tests</strong><div>Social Security cuts, crash years, and inflation spikes are overlays because their timing matters more than their long-run average.</div></div></li>' +
-      '<li class="notice notice--info"><div><strong>Tax model</strong><div>Retirement accounts are tax-free (Roth-style). Property sale gains use a separate capital gains rate. Pension and UBI COLA is capped at 3%.</div></div></li>' +
-      '<li class="notice notice--info"><div><strong>RMDs</strong><div>Required minimum distributions are enforced at age 73 using IRS Uniform Lifetime Table periods, even if cash flow is positive.</div></div></li>' +
-      '</ul>' +
-      '</article>' +
-      '</div>' +
+      '</details>' +
       '</section>'
     );
   }
