@@ -10,6 +10,27 @@
     pessimistic: 'Pessimistic',
   };
 
+  var COLA_CAP = 0.03;
+  var RMD_START_AGE = 73;
+
+  // IRS Uniform Lifetime Table distribution periods (ages 73-120).
+  var RMD_PERIODS = [
+    26.5, 25.5, 24.6, 23.7, 22.9, 22.0, 21.1, 20.2,
+    19.4, 18.5, 17.7, 16.8, 16.0, 15.2, 14.4, 13.7,
+    12.9, 12.2, 11.5, 10.8, 10.1, 9.5, 8.9, 8.4,
+    7.8, 7.3, 6.8, 6.4, 6.0, 5.6, 5.2, 4.9,
+    4.6, 4.3, 4.1, 3.9, 3.7, 3.5, 3.4, 3.3,
+    3.1, 3.0, 2.9, 2.8, 2.7, 2.5, 2.3, 2.0,
+  ];
+
+  function rmdDistributionPeriod(age) {
+    if (age < RMD_START_AGE) {
+      return 0;
+    }
+    var index = Math.min(age - RMD_START_AGE, RMD_PERIODS.length - 1);
+    return RMD_PERIODS[index];
+  }
+
   function deepClone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -152,6 +173,7 @@
         charitableType: 'amount',
         charitableAmount: 5000,
         charitablePercent: 0.05,
+        capitalGainsTaxRate: 0.15,
       },
       stressTests: createDefaultStressTests(),
     };
@@ -318,11 +340,13 @@
       id: toNumber(rawProperty && rawProperty.id, defaults.id || Date.now() + index),
       name: String((rawProperty && rawProperty.name) || defaults.name || 'Property ' + (index + 1)),
       currentValue: Math.max(0, toNumber(rawProperty && rawProperty.currentValue, defaults.currentValue)),
-      appreciationRate: clamp(
-        toNumber(rawProperty && rawProperty.appreciationRate, defaults.appreciationRate),
-        -0.25,
-        0.25
-      ),
+      appreciationRate: Math.round(
+        clamp(
+          toNumber(rawProperty && rawProperty.appreciationRate, defaults.appreciationRate),
+          -0.25,
+          0.25
+        ) * 10000
+      ) / 10000,
       monthlyRentalIncome: Math.max(
         0,
         toNumber(rawProperty && rawProperty.monthlyRentalIncome, defaults.monthlyRentalIncome)
@@ -457,6 +481,14 @@
           ),
           0,
           1
+        ),
+        capitalGainsTaxRate: clamp(
+          toNumber(
+            input.assumptions && input.assumptions.capitalGainsTaxRate,
+            defaults.assumptions.capitalGainsTaxRate
+          ),
+          0,
+          0.5
         ),
       },
       stressTests: {
@@ -788,15 +820,17 @@
   }
 
   function buildProjection(rawPlan, scenarioKey, options) {
-    var migrated = migratePlan(rawPlan);
-    var plan = migrated.plan;
     var settings = options || {};
+    var plan = settings.preMigrated ? rawPlan : migratePlan(rawPlan).plan;
     var ignoreStress = !!settings.ignoreStress;
     var people = getIncludedPeople(plan);
     var lastYear = horizonYear(plan);
     var investmentReturn = scenarioInvestmentReturn(plan.assumptions, scenarioKey || 'base');
     var expenseStepYear = expenseChangeYear(plan);
+    // inflationMultiplier starts at 1 (year 0 = today's dollars) and compounds at year-end.
     var inflationMultiplier = 1;
+    // cappedInflationMultiplier tracks COLA for pension/UBI (capped at COLA_CAP).
+    var cappedInflationMultiplier = 1;
     var liquidAssets = plan.assumptions.startingCashWorth;
     var retirementBalances = people.map(function (person) {
       return person.retirementBalanceToday;
@@ -875,13 +909,13 @@
 
         var pensionIncome = 0;
         if (alive && age >= person.pensionStartAge && person.pensionMonthly > 0) {
-          var pensionMultiplier = person.pensionHasCOLA ? inflationMultiplier : 1;
+          var pensionMultiplier = person.pensionHasCOLA ? cappedInflationMultiplier : 1;
           pensionIncome = person.pensionMonthly * 12 * pensionMultiplier;
         }
 
         var ubiIncome = 0;
         if (alive && age >= person.ubiStartAge && person.ubiMonthly > 0) {
-          ubiIncome = person.ubiMonthly * 12 * inflationMultiplier;
+          ubiIncome = person.ubiMonthly * 12 * cappedInflationMultiplier;
         }
 
         var socialSecurityIncome = 0;
@@ -1065,19 +1099,23 @@
         }
       });
 
-      var taxableIncomeBeforeRetirement = roundMoney(
+      var ordinaryTaxableIncome = roundMoney(
         salaryIncome +
           rentalIncome +
           pensionIncome +
           ubiIncome +
           socialSecurityIncome +
-          liquidInvestmentIncome +
-          propertySaleTaxableGain
+          liquidInvestmentIncome
       );
-      var deductions = roundMoney(retirementContributionTotal + charitableDonation);
-      var taxesBeforeRetirementWithdrawal = roundMoney(
-        Math.max(0, taxableIncomeBeforeRetirement - deductions) * plan.assumptions.taxRate
+      // Retirement contributions are after-tax (accounts are modeled as tax-free).
+      var deductions = roundMoney(charitableDonation);
+      var ordinaryTaxes = roundMoney(
+        Math.max(0, ordinaryTaxableIncome - deductions) * plan.assumptions.taxRate
       );
+      var capitalGainsTaxes = roundMoney(
+        Math.max(0, propertySaleTaxableGain) * plan.assumptions.capitalGainsTaxRate
+      );
+      var taxesBeforeRetirementWithdrawal = roundMoney(ordinaryTaxes + capitalGainsTaxes);
       var grossInflowsBeforeRetirement = roundMoney(
         salaryIncome +
           rentalIncome +
@@ -1101,30 +1139,51 @@
       var accessibleRetirementBalance = retirementBalances.reduce(function (sum, balance, index) {
         return retirementAccessibleFlags[index] ? sum + balance : sum;
       }, 0);
-      var retirementWithdrawal = 0;
-      var retirementWithdrawalTaxes = 0;
-      var retirementWithdrawalsByPerson = retirementBalances.map(function () {
-        return 0;
-      });
 
-      if (cashBeforeRetirementWithdrawal < 0 && accessibleRetirementBalance > 0) {
-        var shortfall = Math.abs(cashBeforeRetirementWithdrawal);
-        var netToGrossFactor = Math.max(0.01, 1 - plan.assumptions.taxRate);
-        var requestedGrossWithdrawal = shortfall / netToGrossFactor;
-        retirementWithdrawalsByPerson = distributeRetirementWithdrawal(
-          retirementBalances,
+      // RMDs apply at age 73+ regardless of retirement status.
+      var rmdByPerson = people.map(function (person, index) {
+        var age = personStates[index].age;
+        if (!personStates[index].alive || age < RMD_START_AGE) {
+          return 0;
+        }
+        var period = rmdDistributionPeriod(age);
+        if (period <= 0) {
+          return 0;
+        }
+        return roundMoney(Math.min(retirementBalances[index], retirementBalances[index] / period));
+      });
+      var totalRmd = rmdByPerson.reduce(function (sum, rmd) {
+        return sum + rmd;
+      }, 0);
+
+      // Start with RMD minimums as baseline withdrawals.
+      var retirementWithdrawalsByPerson = rmdByPerson.slice();
+
+      // If a cash shortfall remains after RMDs, withdraw additional from accessible accounts.
+      var cashAfterRmd = roundMoney(cashBeforeRetirementWithdrawal + totalRmd);
+      if (cashAfterRmd < 0 && accessibleRetirementBalance > 0) {
+        var additionalNeeded = Math.abs(cashAfterRmd);
+        var remainingBalances = retirementBalances.map(function (balance, index) {
+          return retirementAccessibleFlags[index] ? Math.max(0, balance - rmdByPerson[index]) : 0;
+        });
+        var additionalWithdrawals = distributeRetirementWithdrawal(
+          remainingBalances,
           retirementAccessibleFlags,
-          requestedGrossWithdrawal
+          additionalNeeded
         );
-        retirementWithdrawal = retirementWithdrawalsByPerson.reduce(function (sum, withdrawal) {
-          return sum + withdrawal;
-        }, 0);
-        retirementWithdrawalTaxes = roundMoney(retirementWithdrawal * plan.assumptions.taxRate);
-        taxesBeforeRetirementWithdrawal += retirementWithdrawalTaxes;
-        retirementBalances = retirementBalances.map(function (balance, index) {
-          return roundMoney(balance - retirementWithdrawalsByPerson[index]);
+        retirementWithdrawalsByPerson = retirementWithdrawalsByPerson.map(function (rmd, index) {
+          return roundMoney(rmd + additionalWithdrawals[index]);
         });
       }
+
+      var retirementWithdrawal = retirementWithdrawalsByPerson.reduce(function (sum, w) {
+        return sum + w;
+      }, 0);
+
+      // Retirement accounts are modeled as tax-free; no tax on withdrawals.
+      retirementBalances = retirementBalances.map(function (balance, index) {
+        return roundMoney(balance - retirementWithdrawalsByPerson[index]);
+      });
 
       var totalTaxes = roundMoney(taxesBeforeRetirementWithdrawal);
       var grossInflows = roundMoney(grossInflowsBeforeRetirement + retirementWithdrawal);
@@ -1178,9 +1237,12 @@
         expenseChangePercentApplied: expenseChangeActive ? plan.assumptions.expenseChangePercent : 0,
         mortgagePayments: roundMoney(mortgagePayments),
         deductions: roundMoney(deductions),
-        taxableIncome: roundMoney(taxableIncomeBeforeRetirement + retirementWithdrawal),
+        taxableIncome: roundMoney(ordinaryTaxableIncome + propertySaleTaxableGain),
+        ordinaryTaxes: ordinaryTaxes,
+        capitalGainsTaxes: capitalGainsTaxes,
         taxes: totalTaxes,
         retirementWithdrawal: roundMoney(retirementWithdrawal),
+        rmdWithdrawal: roundMoney(totalRmd),
         grossInflows: grossInflows,
         totalOutflows: totalOutflows,
         netCashFlow: netCashFlow,
@@ -1195,6 +1257,7 @@
       });
 
       inflationMultiplier *= 1 + inflationRate;
+      cappedInflationMultiplier *= 1 + Math.min(inflationRate, COLA_CAP);
     }
 
     return projection;
@@ -1249,10 +1312,18 @@
   function buildScenarioSet(plan, options) {
     var migrated = migratePlan(plan);
     var normalizedPlan = migrated.plan;
+    var projectionOptions = {};
+    var key;
+    for (key in (options || {})) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        projectionOptions[key] = options[key];
+      }
+    }
+    projectionOptions.preMigrated = true;
     var scenarios = {};
 
     SCENARIO_ORDER.forEach(function (scenarioKey) {
-      var projection = buildProjection(normalizedPlan, scenarioKey, options);
+      var projection = buildProjection(normalizedPlan, scenarioKey, projectionOptions);
       scenarios[scenarioKey] = {
         key: scenarioKey,
         label: SCENARIO_LABELS[scenarioKey],
@@ -1363,5 +1434,8 @@
     buildStressPreset: buildStressPreset,
     applyStressPreset: applyStressPreset,
     deepClone: deepClone,
+    rmdDistributionPeriod: rmdDistributionPeriod,
+    RMD_START_AGE: RMD_START_AGE,
+    COLA_CAP: COLA_CAP,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

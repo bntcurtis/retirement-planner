@@ -10,8 +10,20 @@
     selectedScenario: 'base',
     activeTab: 'overview',
     snapshotYear: Engine.CURRENT_YEAR,
-    showAllRows: false,
+    showAllRows: true,
     transientMessages: [],
+  };
+
+  var chartState = {
+    projections: null,
+    padding: null,
+    width: 0,
+    xSpan: 0,
+    ySpan: 0,
+    pointCount: 0,
+    minValue: 0,
+    maxValue: 1,
+    yearValues: [],
   };
 
   hydrateDraft();
@@ -302,6 +314,7 @@
     projections.forEach(function (projection) {
       projection.forEach(function (row) {
         allValues.push(row.totalNetWorth);
+        allValues.push(row.endingLiquidAssets);
       });
     });
     allValues.push(0);
@@ -317,6 +330,17 @@
       return row.year;
     });
 
+    // Store for tooltip interaction.
+    chartState.projections = projections;
+    chartState.padding = padding;
+    chartState.width = width;
+    chartState.xSpan = xSpan;
+    chartState.ySpan = ySpan;
+    chartState.pointCount = pointCount;
+    chartState.minValue = minValue;
+    chartState.maxValue = maxValue;
+    chartState.yearValues = yearValues;
+
     function xAt(index) {
       return padding.left + (index / Math.max(1, pointCount - 1)) * xSpan;
     }
@@ -325,11 +349,11 @@
       return padding.top + ((maxValue - value) / (maxValue - minValue)) * ySpan;
     }
 
-    function pathFor(projection) {
+    function pathFor(projection, field) {
       return projection
         .map(function (row, index) {
           var prefix = index === 0 ? 'M' : 'L';
-          return prefix + xAt(index).toFixed(1) + ' ' + yAt(row.totalNetWorth).toFixed(1);
+          return prefix + xAt(index).toFixed(1) + ' ' + yAt(row[field]).toFixed(1);
         })
         .join(' ');
     }
@@ -353,7 +377,16 @@
           colors[key] +
           '"></span>' +
           escapeHtml(bundle.scenarios[key].label) +
-          '</span>'
+          ' net worth</span>'
+        );
+      }).join('') +
+      Engine.SCENARIO_ORDER.map(function (key) {
+        return (
+          '<span class="legend-chip"><span class="legend-chip__swatch legend-chip__swatch--dashed" style="background:' +
+          colors[key] +
+          '"></span>' +
+          escapeHtml(bundle.scenarios[key].label) +
+          ' liquid</span>'
         );
       }).join('') +
       '</div>' +
@@ -361,7 +394,7 @@
       width +
       ' ' +
       height +
-      '" role="img" aria-label="Net worth by scenario">' +
+      '" role="img" aria-label="Net worth and liquid assets by scenario">' +
       gridValues
         .map(function (value) {
           var y = yAt(value);
@@ -396,10 +429,21 @@
       '" y2="' +
       yAt(0).toFixed(1) +
       '" stroke="rgba(255,139,146,0.45)" stroke-width="2"></line>' +
+      // Liquid-asset lines (dashed, behind net-worth lines).
       Engine.SCENARIO_ORDER.map(function (key) {
         return (
           '<path d="' +
-          pathFor(bundle.scenarios[key].projection) +
+          pathFor(bundle.scenarios[key].projection, 'endingLiquidAssets') +
+          '" fill="none" stroke="' +
+          colors[key] +
+          '" stroke-width="2" stroke-dasharray="6 4" opacity="0.55" stroke-linecap="round" stroke-linejoin="round"></path>'
+        );
+      }).join('') +
+      // Net-worth lines (solid, on top).
+      Engine.SCENARIO_ORDER.map(function (key) {
+        return (
+          '<path d="' +
+          pathFor(bundle.scenarios[key].projection, 'totalNetWorth') +
           '" fill="none" stroke="' +
           colors[key] +
           '" stroke-width="' +
@@ -407,6 +451,29 @@
           '" stroke-linecap="round" stroke-linejoin="round"></path>'
         );
       }).join('') +
+      // Tooltip elements (hidden until hover).
+      '<line class="chart-cursor-line" x1="0" x2="0" y1="' +
+      padding.top +
+      '" y2="' +
+      (height - padding.bottom) +
+      '" stroke="rgba(255,255,255,0.35)" stroke-width="1" display="none"></line>' +
+      '<g class="chart-tooltip-group" display="none">' +
+      '<rect class="chart-tooltip-bg" x="0" y="0" width="180" height="80" rx="8" fill="rgba(8,17,28,0.92)" stroke="rgba(183,207,227,0.2)"></rect>' +
+      '<text class="chart-tooltip-year" x="10" y="20" fill="#ebf2f7" font-size="13" font-weight="700"></text>' +
+      '<text class="chart-tooltip-nw" x="10" y="40" fill="#99aaba" font-size="12"></text>' +
+      '<text class="chart-tooltip-liq" x="10" y="58" fill="#99aaba" font-size="12"></text>' +
+      '<text class="chart-tooltip-ret" x="10" y="76" fill="#99aaba" font-size="12"></text>' +
+      '</g>' +
+      // Invisible overlay for mouse events.
+      '<rect class="chart-overlay" x="' +
+      padding.left +
+      '" y="' +
+      padding.top +
+      '" width="' +
+      xSpan +
+      '" height="' +
+      ySpan +
+      '" fill="transparent"></rect>' +
       '<text x="' +
       padding.left +
       '" y="' +
@@ -609,6 +676,8 @@
       '<ul class="notice-list">' +
       '<li class="notice notice--info"><div><strong>Scenarios</strong><div>Optimistic, Base, and Pessimistic control average annual investment returns while preserving simplicity.</div></div></li>' +
       '<li class="notice notice--info"><div><strong>Stress tests</strong><div>Social Security cuts, crash years, and inflation spikes are overlays because their timing matters more than their long-run average.</div></div></li>' +
+      '<li class="notice notice--info"><div><strong>Tax model</strong><div>Retirement accounts are tax-free (Roth-style). Property sale gains use a separate capital gains rate. Pension and UBI COLA is capped at 3%.</div></div></li>' +
+      '<li class="notice notice--info"><div><strong>RMDs</strong><div>Required minimum distributions are enforced at age 73 using IRS Uniform Lifetime Table periods, even if cash flow is positive.</div></div></li>' +
       '</ul>' +
       '</article>' +
       '</div>' +
@@ -638,7 +707,8 @@
     });
 
     var outflows = [
-      { label: 'Taxes', value: snapshot.taxes },
+      { label: 'Income taxes', value: snapshot.ordinaryTaxes },
+      { label: 'Capital gains taxes', value: snapshot.capitalGainsTaxes },
       { label: 'Living expenses', value: snapshot.livingExpenses },
       { label: 'Mortgage payments', value: snapshot.mortgagePayments },
       { label: 'Retirement contributions', value: snapshot.retirementContributionTotal },
@@ -928,7 +998,7 @@
       numberField('Annual salary growth', 'people.' + index + '.salaryGrowthRate', person.salaryGrowthRate, { dataType: 'percent', step: 0.1 }) +
       numberField('Part-time start age', 'people.' + index + '.partTimeAge', person.partTimeAge, { dataType: 'integer', allowEmpty: true, min: person.currentAge, max: person.retirementAge, hint: 'Leave blank to skip part-time work.' }) +
       numberField('Part-time ratio', 'people.' + index + '.partTimeRatio', person.partTimeRatio, { dataType: 'percent', min: 0, max: 100, step: 1, hint: 'Percent of full salary once part-time begins.' }) +
-      numberField('Retirement balance today', 'people.' + index + '.retirementBalanceToday', person.retirementBalanceToday, { min: 0, step: 1000, hint: 'Current 401(k), IRA, and similar balances today.' }) +
+      numberField('Retirement balance today', 'people.' + index + '.retirementBalanceToday', person.retirementBalanceToday, { min: 0, step: 1000, hint: 'Current 401(k), IRA, and similar balances today. All retirement accounts are modeled as tax-free (Roth-style): contributions are after-tax, withdrawals are untaxed.' }) +
       selectField('Contribution type', 'people.' + index + '.retirementContributionType', person.retirementContributionType, [
         { value: 'percent', label: 'Percent of salary' },
         { value: 'amount', label: 'Fixed annual amount' },
@@ -940,8 +1010,8 @@
       }) +
       numberField('Pension (monthly)', 'people.' + index + '.pensionMonthly', person.pensionMonthly, { min: 0, step: 100 }) +
       numberField('Pension start age', 'people.' + index + '.pensionStartAge', person.pensionStartAge, { dataType: 'integer', min: 18, max: 120 }) +
-      checkboxField('Pension has COLA', 'people.' + index + '.pensionHasCOLA', person.pensionHasCOLA, 'If enabled, pension payments rise with inflation.') +
-      numberField('UBI (monthly)', 'people.' + index + '.ubiMonthly', person.ubiMonthly, { min: 0, step: 100, hint: 'Optional upside-case income. Assumed to track inflation.' }) +
+      checkboxField('Pension has COLA', 'people.' + index + '.pensionHasCOLA', person.pensionHasCOLA, 'If enabled, pension payments rise with inflation (COLA capped at 3%).') +
+      numberField('UBI (monthly)', 'people.' + index + '.ubiMonthly', person.ubiMonthly, { min: 0, step: 100, hint: 'Optional upside-case income. Tracks inflation, COLA capped at 3%.' }) +
       numberField('UBI start age', 'people.' + index + '.ubiStartAge', person.ubiStartAge, { dataType: 'integer', min: 18, max: 120 }) +
       numberField('Social Security (monthly)', 'people.' + index + '.socialSecurityMonthly', person.socialSecurityMonthly, { min: 0, step: 100 }) +
       numberField('Social Security start age', 'people.' + index + '.socialSecurityStartAge', person.socialSecurityStartAge, { dataType: 'integer', min: 18, max: 120 }) +
@@ -1020,7 +1090,8 @@
       '<div class="form-grid">' +
       numberField('Current liquid savings', 'assumptions.startingCashWorth', plan.assumptions.startingCashWorth, { min: 0, step: 1000 }) +
       numberField('Annual expenses today', 'assumptions.startingAnnualExpenses', plan.assumptions.startingAnnualExpenses, { min: 0, step: 1000 }) +
-      numberField('Effective tax rate', 'assumptions.taxRate', plan.assumptions.taxRate, { dataType: 'percent', min: 0, max: 100, step: 0.1, hint: 'Applied consistently across the simplified taxable income model.' }) +
+      numberField('Effective tax rate', 'assumptions.taxRate', plan.assumptions.taxRate, { dataType: 'percent', min: 0, max: 100, step: 0.1, hint: 'Applied to ordinary income. Retirement withdrawals are tax-free.' }) +
+      numberField('Capital gains tax rate', 'assumptions.capitalGainsTaxRate', plan.assumptions.capitalGainsTaxRate, { dataType: 'percent', min: 0, max: 50, step: 0.1, hint: 'Applied to property sale gains only.' }) +
       numberField('Base inflation', 'assumptions.inflationRate', plan.assumptions.inflationRate, { dataType: 'percent', step: 0.1 }) +
       numberField('Expense change age (Person 1)', 'assumptions.expenseChangeAge', plan.assumptions.expenseChangeAge, { dataType: 'integer', allowEmpty: true, min: plan.people[0].currentAge, max: 130, step: 1, hint: 'Use this for kids leaving home, downsizing, or assisted living. Leave blank to disable.' }) +
       numberField('Expense change percent', 'assumptions.expenseChangePercent', plan.assumptions.expenseChangePercent, { dataType: 'percent', min: -100, max: 500, step: 0.1, hint: 'Permanent one-time step change. Negative decreases spending; positive increases it.' }) +
@@ -1467,6 +1538,74 @@
     applyPlan(nextPlan);
   }
 
+  function setupChartInteraction() {
+    var overlay = document.querySelector('.chart-overlay');
+    if (!overlay || !chartState.projections) {
+      return;
+    }
+
+    var svg = overlay.closest('svg');
+    var cursorLine = svg.querySelector('.chart-cursor-line');
+    var tooltipGroup = svg.querySelector('.chart-tooltip-group');
+    var tooltipBg = svg.querySelector('.chart-tooltip-bg');
+    var tooltipYear = svg.querySelector('.chart-tooltip-year');
+    var tooltipNw = svg.querySelector('.chart-tooltip-nw');
+    var tooltipLiq = svg.querySelector('.chart-tooltip-liq');
+    var tooltipRet = svg.querySelector('.chart-tooltip-ret');
+
+    if (!cursorLine || !tooltipGroup) {
+      return;
+    }
+
+    var scenarioIndex = Engine.SCENARIO_ORDER.indexOf(state.selectedScenario);
+    if (scenarioIndex < 0) {
+      scenarioIndex = 1;
+    }
+
+    overlay.addEventListener('mousemove', function (event) {
+      var rect = svg.getBoundingClientRect();
+      var scaleX = chartState.width / rect.width;
+      var mouseX = (event.clientX - rect.left) * scaleX;
+      var relX = mouseX - chartState.padding.left;
+      var yearIndex = Math.round(relX / chartState.xSpan * Math.max(1, chartState.pointCount - 1));
+      yearIndex = Math.max(0, Math.min(chartState.pointCount - 1, yearIndex));
+
+      var row = chartState.projections[scenarioIndex][yearIndex];
+      if (!row) {
+        return;
+      }
+
+      var xPos = chartState.padding.left + (yearIndex / Math.max(1, chartState.pointCount - 1)) * chartState.xSpan;
+
+      cursorLine.setAttribute('x1', xPos.toFixed(1));
+      cursorLine.setAttribute('x2', xPos.toFixed(1));
+      cursorLine.setAttribute('display', '');
+
+      var ageLabel = row.personStates.map(function (ps) {
+        return ps.alive ? ps.age : '—';
+      }).join('/');
+
+      tooltipYear.textContent = row.year + ' (age ' + ageLabel + ')';
+      tooltipNw.textContent = 'Net worth: ' + Engine.formatCurrency(row.totalNetWorth);
+      tooltipLiq.textContent = 'Liquid: ' + Engine.formatCurrency(row.endingLiquidAssets);
+      tooltipRet.textContent = 'Retirement: ' + Engine.formatCurrency(row.totalRetirementBalance);
+
+      var tooltipX = xPos + 14;
+      if (tooltipX + 200 > chartState.width - chartState.padding.right) {
+        tooltipX = xPos - 194;
+      }
+      var tooltipY = chartState.padding.top + 6;
+
+      tooltipGroup.setAttribute('transform', 'translate(' + tooltipX.toFixed(1) + ',' + tooltipY.toFixed(1) + ')');
+      tooltipGroup.setAttribute('display', '');
+    });
+
+    overlay.addEventListener('mouseout', function () {
+      cursorLine.setAttribute('display', 'none');
+      tooltipGroup.setAttribute('display', 'none');
+    });
+  }
+
   function render() {
     var bundle = Engine.buildScenarioSet(state.plan);
     state.plan = bundle.plan;
@@ -1484,7 +1623,7 @@
       '<div class="hero__heading">' +
       '<span class="eyebrow">Static • Private • Browser-only</span>' +
       '<h1>Retirement Planner</h1>' +
-      '<p>This version is intentionally simple: plain HTML, CSS, and JavaScript, with a standalone financial engine and event-based stress tests layered on top of long-run scenarios.</p>' +
+      '<p>Plain HTML, CSS, and JavaScript with tax-free retirement accounts, RMDs at 73, capital gains on property sales, COLA-capped pensions, and event-based stress tests layered on long-run scenarios.</p>' +
       '<nav class="tab-nav">' +
       '<button type="button" class="tab-button ' +
       (state.activeTab === 'overview' ? 'is-active' : '') +
@@ -1518,6 +1657,7 @@
       '<input id="plan-file-input" type="file" accept=".json,application/json" class="hidden">' +
       '</main>';
 
+    setupChartInteraction();
     state.transientMessages = [];
   }
 })();
