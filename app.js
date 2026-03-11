@@ -27,6 +27,16 @@
     yearValues: [],
   };
 
+  var ieChartState = {
+    years: null,
+    pad: null,
+    width: 0,
+    barWidth: 0,
+    gap: 0,
+    barCount: 0,
+    maxVal: 1,
+  };
+
   var debounceTimer = null;
   var DEBOUNCE_MS = 600;
 
@@ -608,6 +618,17 @@
     });
     var maxVal = Math.max(maxIncome, maxExpense, 1);
 
+    // Store for tooltip interaction.
+    ieChartState.years = years;
+    ieChartState.pad = pad;
+    ieChartState.width = width;
+    ieChartState.height = height;
+    ieChartState.barWidth = barWidth;
+    ieChartState.gap = gap;
+    ieChartState.barCount = barCount;
+    ieChartState.maxVal = maxVal;
+    ieChartState.ySpan = ySpan;
+
     function barX(index) {
       return pad.left + index * (barWidth + gap);
     }
@@ -700,6 +721,26 @@
       '</div>' +
       '<svg class="ie-chart-svg" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Income versus expenses by year">' +
       gridLines + bars + xLabels +
+      // Tooltip elements (hidden until hover).
+      '<line class="ie-cursor-line" x1="0" x2="0" y1="' +
+      pad.top + '" y2="' + (height - pad.bottom) +
+      '" stroke="rgba(255,255,255,0.35)" stroke-width="1" display="none"></line>' +
+      '<g class="ie-tooltip-group" display="none">' +
+      '<rect class="ie-tooltip-bg" x="0" y="0" width="200" height="130" rx="8" fill="rgba(8,17,28,0.92)" stroke="rgba(183,207,227,0.2)"></rect>' +
+      '<text class="ie-tt-year" x="10" y="18" fill="#ebf2f7" font-size="13" font-weight="700"></text>' +
+      '<text class="ie-tt-l0" x="10" y="36" fill="#99aaba" font-size="12"></text>' +
+      '<text class="ie-tt-l1" x="10" y="52" fill="#99aaba" font-size="12"></text>' +
+      '<text class="ie-tt-l2" x="10" y="68" fill="#99aaba" font-size="12"></text>' +
+      '<text class="ie-tt-l3" x="10" y="84" fill="#99aaba" font-size="12"></text>' +
+      '<text class="ie-tt-l4" x="10" y="100" fill="#99aaba" font-size="12"></text>' +
+      '<text class="ie-tt-l5" x="10" y="118" fill="#99aaba" font-size="12"></text>' +
+      '</g>' +
+      // Invisible overlay for mouse events.
+      '<rect class="ie-chart-overlay" x="' + pad.left +
+      '" y="' + pad.top +
+      '" width="' + xSpan +
+      '" height="' + ySpan +
+      '" fill="transparent"></rect>' +
       '</svg>' +
       '</div>'
     );
@@ -1497,8 +1538,13 @@
   }
 
   function printReport(bundle, projection) {
-    var reportWindow = window.open('', '_blank', 'noopener,noreferrer');
+    var html = generateReportHtml(bundle, projection);
+    var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var reportWindow = window.open(url);
+
     if (!reportWindow) {
+      URL.revokeObjectURL(url);
       state.transientMessages = [
         {
           level: 'warning',
@@ -1509,11 +1555,16 @@
       return;
     }
 
-    reportWindow.document.open();
-    reportWindow.document.write(generateReportHtml(bundle, projection));
-    reportWindow.document.close();
-    reportWindow.focus();
-    reportWindow.print();
+    // Give the browser time to render the HTML before triggering print.
+    setTimeout(function () {
+      try {
+        reportWindow.focus();
+        reportWindow.print();
+      } catch (error) {
+        // Window may have been closed by the user.
+      }
+      URL.revokeObjectURL(url);
+    }, 400);
   }
 
   function handleClick(event) {
@@ -1802,6 +1853,120 @@
     });
   }
 
+  function setupIEChartInteraction() {
+    var overlay = document.querySelector('.ie-chart-overlay');
+    if (!overlay || !ieChartState.years) {
+      return;
+    }
+
+    var svg = overlay.closest('svg');
+    var cursorLine = svg.querySelector('.ie-cursor-line');
+    var tooltipGroup = svg.querySelector('.ie-tooltip-group');
+    var tooltipBg = svg.querySelector('.ie-tooltip-bg');
+    var ttYear = svg.querySelector('.ie-tt-year');
+    var ttLines = [
+      svg.querySelector('.ie-tt-l0'),
+      svg.querySelector('.ie-tt-l1'),
+      svg.querySelector('.ie-tt-l2'),
+      svg.querySelector('.ie-tt-l3'),
+      svg.querySelector('.ie-tt-l4'),
+      svg.querySelector('.ie-tt-l5'),
+    ];
+
+    if (!cursorLine || !tooltipGroup) {
+      return;
+    }
+
+    var incomeLabels = ['Salary', 'Rental', 'Pension/SS/UBI', 'Investments', 'Retirement wd'];
+    var incomeColors = ['#34d399', '#22d3ee', '#a78bfa', '#6366f1', '#14b8a6'];
+
+    overlay.addEventListener('mousemove', function (event) {
+      var rect = svg.getBoundingClientRect();
+      var scaleX = ieChartState.width / rect.width;
+      var mouseX = (event.clientX - rect.left) * scaleX;
+      var relX = mouseX - ieChartState.pad.left;
+      var stride = ieChartState.barWidth + ieChartState.gap;
+      var barIndex = Math.round(relX / stride);
+      barIndex = Math.max(0, Math.min(ieChartState.barCount - 1, barIndex));
+
+      var row = ieChartState.years[barIndex];
+      if (!row) {
+        return;
+      }
+
+      // Position cursor line at bar center.
+      var xCenter = ieChartState.pad.left + barIndex * stride + ieChartState.barWidth * 0.5;
+      cursorLine.setAttribute('x1', xCenter.toFixed(1));
+      cursorLine.setAttribute('x2', xCenter.toFixed(1));
+      cursorLine.setAttribute('display', '');
+
+      // Year/age header.
+      var ageStr = row.personStates.map(function (ps) {
+        return ps.alive ? ps.age : '—';
+      }).join('/');
+      ttYear.textContent = row.year + ' (age ' + ageStr + ')';
+
+      // Income components.
+      var incomes = [
+        Math.max(0, row.salaryIncome),
+        Math.max(0, row.rentalIncome),
+        Math.max(0, row.pensionIncome + row.socialSecurityIncome + row.ubiIncome),
+        Math.max(0, row.liquidInvestmentIncome),
+        Math.max(0, row.retirementWithdrawal),
+      ];
+
+      // Fill tooltip lines: show non-zero income components, then expenses.
+      var lineIdx = 0;
+      for (var ci = 0; ci < incomes.length; ci++) {
+        if (incomes[ci] > 0) {
+          ttLines[lineIdx].textContent = incomeLabels[ci] + ': ' + Engine.formatCurrency(incomes[ci]);
+          ttLines[lineIdx].setAttribute('fill', incomeColors[ci]);
+          ttLines[lineIdx].setAttribute('display', '');
+          lineIdx++;
+        }
+      }
+      // Expenses line.
+      if (lineIdx < ttLines.length) {
+        ttLines[lineIdx].textContent = 'Expenses: ' + Engine.formatCurrency(row.totalOutflows);
+        ttLines[lineIdx].setAttribute('fill', '#f43f5e');
+        ttLines[lineIdx].setAttribute('display', '');
+        lineIdx++;
+      }
+      // Hide remaining lines.
+      for (var hi = lineIdx; hi < ttLines.length; hi++) {
+        ttLines[hi].setAttribute('display', 'none');
+        ttLines[hi].textContent = '';
+      }
+
+      // Resize tooltip background to fit visible lines.
+      var bgHeight = 26 + lineIdx * 16;
+      tooltipBg.setAttribute('height', bgHeight);
+
+      // Reposition text y-coordinates for compactness.
+      var yPos = 36;
+      for (var ti = 0; ti < lineIdx; ti++) {
+        ttLines[ti].setAttribute('y', yPos);
+        yPos += 16;
+      }
+
+      // Position tooltip.
+      var tooltipW = 200;
+      var tooltipX = xCenter + 14;
+      if (tooltipX + tooltipW > ieChartState.width - ieChartState.pad.right) {
+        tooltipX = xCenter - tooltipW - 14;
+      }
+      var tooltipY = ieChartState.pad.top + 6;
+
+      tooltipGroup.setAttribute('transform', 'translate(' + tooltipX.toFixed(1) + ',' + tooltipY.toFixed(1) + ')');
+      tooltipGroup.setAttribute('display', '');
+    });
+
+    overlay.addEventListener('mouseout', function () {
+      cursorLine.setAttribute('display', 'none');
+      tooltipGroup.setAttribute('display', 'none');
+    });
+  }
+
   function render() {
     var bundle = Engine.buildScenarioSet(state.plan);
     state.plan = bundle.plan;
@@ -1854,6 +2019,7 @@
       '</main>';
 
     setupChartInteraction();
+    setupIEChartInteraction();
     state.transientMessages = [];
   }
 })();

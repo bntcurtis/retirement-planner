@@ -1016,7 +1016,10 @@ td {
   .button--ghost,
   .toggle-group,
   input[type="file"],
-  .chart-overlay {
+  .chart-overlay,
+  .ie-chart-overlay,
+  .ie-cursor-line,
+  .ie-tooltip-group {
     display: none !important;
   }
 
