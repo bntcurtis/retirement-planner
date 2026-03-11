@@ -487,6 +487,7 @@ td {
 .data-card,
 .snapshot-card {
   padding: 1.1rem 1.2rem;
+  align-self: start;
 }
 
 .chart-card {

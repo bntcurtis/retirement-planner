@@ -27,6 +27,9 @@
     yearValues: [],
   };
 
+  var debounceTimer = null;
+  var DEBOUNCE_MS = 600;
+
   hydrateDraft();
   render();
 
@@ -1647,6 +1650,40 @@
     }
   }
 
+  function commitInput(target) {
+    var nextPlan = clone(state.plan);
+    var value;
+    var dataType = target.dataset.type;
+    var allowEmpty = target.dataset.allowEmpty === 'true';
+
+    if (dataType === 'boolean') {
+      value = target.checked;
+    } else if (dataType === 'integer') {
+      value = target.value === '' && allowEmpty ? null : Math.round(Number(target.value) || 0);
+    } else if (dataType === 'number') {
+      value = target.value === '' && allowEmpty ? null : Number(target.value) || 0;
+    } else if (dataType === 'percent') {
+      value = target.value === '' && allowEmpty ? null : (Number(target.value) || 0) / 100;
+    } else {
+      value = target.value;
+    }
+
+    setPathValue(nextPlan, target.dataset.path, value);
+
+    if (target.dataset.path === 'includePerson2' && !value) {
+      state.selectedScenario = state.selectedScenario || 'base';
+    }
+
+    var focusId = target.id;
+    applyPlan(nextPlan);
+
+    // Restore focus to the field being edited after re-render.
+    var restored = focusId && document.getElementById(focusId);
+    if (restored) {
+      restored.focus();
+    }
+  }
+
   function handleInput(event) {
     var target = event.target;
 
@@ -1680,30 +1717,21 @@
       return;
     }
 
-    var nextPlan = clone(state.plan);
-    var value;
-    var dataType = target.dataset.type;
-    var allowEmpty = target.dataset.allowEmpty === 'true';
+    // Debounce text and number keystrokes so users can finish editing
+    // before the app re-renders. Checkboxes, selects, range sliders,
+    // and blur/change events commit immediately.
+    var shouldDebounce = event.type === 'input' &&
+      (target.type === 'number' || target.type === 'text');
 
-    if (dataType === 'boolean') {
-      value = target.checked;
-    } else if (dataType === 'integer') {
-      value = target.value === '' && allowEmpty ? null : Math.round(Number(target.value) || 0);
-    } else if (dataType === 'number') {
-      value = target.value === '' && allowEmpty ? null : Number(target.value) || 0;
-    } else if (dataType === 'percent') {
-      value = target.value === '' && allowEmpty ? null : (Number(target.value) || 0) / 100;
+    clearTimeout(debounceTimer);
+
+    if (shouldDebounce) {
+      debounceTimer = setTimeout(function () {
+        commitInput(target);
+      }, DEBOUNCE_MS);
     } else {
-      value = target.value;
+      commitInput(target);
     }
-
-    setPathValue(nextPlan, target.dataset.path, value);
-
-    if (target.dataset.path === 'includePerson2' && !value) {
-      state.selectedScenario = state.selectedScenario || 'base';
-    }
-
-    applyPlan(nextPlan);
   }
 
   function setupChartInteraction() {
