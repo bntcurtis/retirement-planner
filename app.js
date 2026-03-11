@@ -396,6 +396,16 @@
       ' ' +
       height +
       '" role="img" aria-label="Net worth and liquid assets by scenario">' +
+      '<defs>' +
+      Engine.SCENARIO_ORDER.map(function (key) {
+        return (
+          '<linearGradient id="grad-' + key + '" x1="0" y1="0" x2="0" y2="1">' +
+          '<stop offset="0%" stop-color="' + colors[key] + '" stop-opacity="0.28"></stop>' +
+          '<stop offset="100%" stop-color="' + colors[key] + '" stop-opacity="0.02"></stop>' +
+          '</linearGradient>'
+        );
+      }).join('') +
+      '</defs>' +
       gridValues
         .map(function (value) {
           var y = yAt(value);
@@ -430,6 +440,16 @@
       '" y2="' +
       yAt(0).toFixed(1) +
       '" stroke="rgba(255,139,146,0.45)" stroke-width="2"></line>' +
+      // Gradient area fills under net-worth lines.
+      Engine.SCENARIO_ORDER.map(function (key) {
+        var areaPath = pathFor(bundle.scenarios[key].projection, 'totalNetWorth') +
+          ' L' + xAt(pointCount - 1).toFixed(1) + ' ' + (padding.top + ySpan).toFixed(1) +
+          ' L' + xAt(0).toFixed(1) + ' ' + (padding.top + ySpan).toFixed(1) + ' Z';
+        return (
+          '<path d="' + areaPath + '" fill="url(#grad-' + key + ')" opacity="' +
+          (key === state.selectedScenario ? '0.7' : '0.18') + '"></path>'
+        );
+      }).join('') +
       // Liquid-asset lines (dashed, behind net-worth lines).
       Engine.SCENARIO_ORDER.map(function (key) {
         return (
