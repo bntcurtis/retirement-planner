@@ -344,7 +344,6 @@
       return row.year;
     });
 
-    // Store for tooltip interaction.
     chartState.projections = projections;
     chartState.padding = padding;
     chartState.width = width;
@@ -453,7 +452,6 @@
       '" y2="' +
       yAt(0).toFixed(1) +
       '" stroke="rgba(255,139,146,0.45)" stroke-width="2"></line>' +
-      // Gradient area fills under net-worth lines.
       Engine.SCENARIO_ORDER.map(function (key) {
         var areaPath = pathFor(bundle.scenarios[key].projection, 'totalNetWorth') +
           ' L' + xAt(pointCount - 1).toFixed(1) + ' ' + (padding.top + ySpan).toFixed(1) +
@@ -463,7 +461,6 @@
           (key === state.selectedScenario ? '0.7' : '0.18') + '"></path>'
         );
       }).join('') +
-      // Liquid-asset lines (dashed, behind net-worth lines).
       Engine.SCENARIO_ORDER.map(function (key) {
         return (
           '<path d="' +
@@ -473,7 +470,6 @@
           '" stroke-width="2" stroke-dasharray="6 4" opacity="0.55" stroke-linecap="round" stroke-linejoin="round"></path>'
         );
       }).join('') +
-      // Net-worth lines (solid, on top).
       Engine.SCENARIO_ORDER.map(function (key) {
         return (
           '<path d="' +
@@ -485,7 +481,6 @@
           '" stroke-linecap="round" stroke-linejoin="round"></path>'
         );
       }).join('') +
-      // Tooltip elements (hidden until hover).
       '<line class="chart-cursor-line" x1="0" x2="0" y1="' +
       padding.top +
       '" y2="' +
@@ -498,7 +493,6 @@
       '<text class="chart-tooltip-liq" x="10" y="58" fill="#99aaba" font-size="12"></text>' +
       '<text class="chart-tooltip-ret" x="10" y="76" fill="#99aaba" font-size="12"></text>' +
       '</g>' +
-      // Invisible overlay for mouse events.
       '<rect class="chart-overlay" x="' +
       padding.left +
       '" y="' +
@@ -509,7 +503,7 @@
       ySpan +
       '" fill="transparent"></rect>' +
       (function () {
-        var baseProj = projections[1]; // base scenario for age labels
+        var baseProj = projections[1];
         var firstRow = baseProj[0];
         var midRow = baseProj[Math.floor(pointCount / 2)];
         var lastRow = baseProj[pointCount - 1];
@@ -597,7 +591,6 @@
     var barWidth = Math.max(2, xSpan / barCount - 1);
     var gap = Math.max(0.5, (xSpan - barWidth * barCount) / Math.max(1, barCount - 1));
 
-    // Income components: salary, rental, pension+SS, investment return, retirement withdrawal.
     function incomeStack(row) {
       return [
         Math.max(0, row.salaryIncome),
@@ -618,7 +611,6 @@
     });
     var maxVal = Math.max(maxIncome, maxExpense, 1);
 
-    // Store for tooltip interaction.
     ieChartState.years = years;
     ieChartState.pad = pad;
     ieChartState.width = width;
@@ -646,7 +638,6 @@
       var incomes = incomeStack(row);
       var yCursor = pad.top + ySpan;
 
-      // Stacked income bars.
       incomes.forEach(function (val, ci) {
         if (val <= 0) { return; }
         var barH = (val / maxVal) * ySpan;
@@ -660,7 +651,6 @@
           '" opacity="0.85" rx="1"></rect>';
       });
 
-      // Expense bar (right half).
       var expH = (row.totalOutflows / maxVal) * ySpan;
       bars +=
         '<rect x="' + (x + barWidth * 0.52).toFixed(1) +
@@ -670,7 +660,6 @@
         '" fill="#f43f5e" opacity="0.75" rx="1"></rect>';
     });
 
-    // X-axis labels (first, middle, last).
     var first = years[0];
     var mid = years[Math.floor(barCount / 2)];
     var last = years[barCount - 1];
@@ -721,7 +710,6 @@
       '</div>' +
       '<svg class="ie-chart-svg" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Income versus expenses by year">' +
       gridLines + bars + xLabels +
-      // Tooltip elements (hidden until hover).
       '<line class="ie-cursor-line" x1="0" x2="0" y1="' +
       pad.top + '" y2="' + (height - pad.bottom) +
       '" stroke="rgba(255,255,255,0.35)" stroke-width="1" display="none"></line>' +
@@ -735,7 +723,6 @@
       '<text class="ie-tt-l4" x="10" y="100" fill="#99aaba" font-size="12"></text>' +
       '<text class="ie-tt-l5" x="10" y="118" fill="#99aaba" font-size="12"></text>' +
       '</g>' +
-      // Invisible overlay for mouse events.
       '<rect class="ie-chart-overlay" x="' + pad.left +
       '" y="' + pad.top +
       '" width="' + xSpan +
@@ -883,8 +870,8 @@
       '<div class="details-block__body">' +
       '<div><strong>Scenarios</strong> — Optimistic, Base, and Pessimistic control average annual investment returns.</div>' +
       '<div><strong>Stress tests</strong> — Social Security cuts, market crashes, and inflation spikes are overlays because their timing matters more than their long-run average.</div>' +
-      '<div><strong>Tax model</strong> — Retirement accounts are tax-free (Roth-style). Property sale gains use a separate capital gains rate. Pension and UBI COLA is capped at 3%.</div>' +
-      '<div><strong>RMDs</strong> — Required minimum distributions are enforced at age 73 using IRS Uniform Lifetime Table periods, even when cash flow is positive.</div>' +
+      '<div><strong>Tax model</strong> — Each retirement account is either tax-deferred (traditional 401(k)/IRA: contributions deductible, withdrawals taxed) or Roth (contributions after-tax, withdrawals tax-free). Property sale gains use a separate capital gains rate with cost basis, selling costs, and a primary-residence exclusion. Social Security is partially taxable via a configurable percent (default 85%). Liquid investment returns are partially taxable as ordinary income via a configurable yield percent (default 30%).</div>' +
+      '<div><strong>RMDs</strong> — Required minimum distributions are enforced at age 73 on tax-deferred accounts only. Roth accounts have no owner RMDs.</div>' +
       '</div>' +
       '</details>' +
       '</section>'
@@ -1025,6 +1012,9 @@
             '</strong><span>' +
             escapeHtml(personState.alive ? 'Age ' + personState.age : 'Not modeled after target end age') +
             '</span></div>' +
+            '<div class="split-row"><span class="value-muted">Account type</span><span>' +
+            escapeHtml(personState.retirementAccountType === 'roth' ? 'Roth' : 'Tax-deferred') +
+            '</span></div>' +
             '<div class="split-row"><span class="value-muted">Salary</span><span>' +
             escapeHtml(Engine.formatCurrency(personState.salary)) +
             '</span></div>' +
@@ -1067,7 +1057,12 @@
                 (property.sold
                   ? '<div class="split-row"><span class="value-muted">Sale proceeds</span><span>' +
                     escapeHtml(Engine.formatCurrency(property.saleProceeds)) +
-                    '</span></div>'
+                    '</span></div>' +
+                    (property.taxableGain > 0
+                      ? '<div class="split-row"><span class="value-muted">Taxable gain</span><span>' +
+                        escapeHtml(Engine.formatCurrency(property.taxableGain)) +
+                        '</span></div>'
+                      : '')
                   : '<div class="split-row"><span class="value-muted">Remaining mortgage</span><span>' +
                     escapeHtml(Engine.formatCurrency(property.remainingMortgage)) +
                     '</span></div>' +
@@ -1204,7 +1199,11 @@
       numberField('Annual salary growth', 'people.' + index + '.salaryGrowthRate', person.salaryGrowthRate, { dataType: 'percent', step: 0.1 }) +
       numberField('Part-time start age', 'people.' + index + '.partTimeAge', person.partTimeAge, { dataType: 'integer', allowEmpty: true, min: person.currentAge, max: person.retirementAge, hint: 'Leave blank to skip part-time work.' }) +
       numberField('Part-time ratio', 'people.' + index + '.partTimeRatio', person.partTimeRatio, { dataType: 'percent', min: 0, max: 100, step: 1, hint: 'Percent of full salary once part-time begins.' }) +
-      numberField('Retirement balance today', 'people.' + index + '.retirementBalanceToday', person.retirementBalanceToday, { min: 0, step: 1000, hint: 'Current 401(k), IRA, and similar balances today. All retirement accounts are modeled as tax-free (Roth-style): contributions are after-tax, withdrawals are untaxed.' }) +
+      numberField('Retirement balance today', 'people.' + index + '.retirementBalanceToday', person.retirementBalanceToday, { min: 0, step: 1000, hint: 'Current 401(k), IRA, and similar balances today.' }) +
+      selectField('Account type', 'people.' + index + '.retirementAccountType', person.retirementAccountType, [
+        { value: 'taxDeferred', label: 'Tax-deferred (traditional 401(k)/IRA)' },
+        { value: 'roth', label: 'Roth (after-tax)' },
+      ], { hint: 'Tax-deferred: contributions reduce taxable income, withdrawals are taxed, RMDs apply at 73. Roth: contributions are after-tax, withdrawals and growth are tax-free, no owner RMDs.' }) +
       selectField('Contribution type', 'people.' + index + '.retirementContributionType', person.retirementContributionType, [
         { value: 'percent', label: 'Percent of salary' },
         { value: 'amount', label: 'Fixed annual amount' },
@@ -1242,10 +1241,14 @@
       '<div class="form-grid">' +
       textField('Property name', 'properties.' + index + '.name', property.name) +
       numberField('Current value', 'properties.' + index + '.currentValue', property.currentValue, { min: 0, step: 1000 }) +
+      numberField('Cost basis', 'properties.' + index + '.costBasis', property.costBasis, { min: 0, step: 1000, hint: 'Purchase price plus capital improvements. Used for capital gains tax on sale.' }) +
       numberField('Annual appreciation', 'properties.' + index + '.appreciationRate', property.appreciationRate, { dataType: 'percent', step: 0.1 }) +
-      numberField('Monthly rental income', 'properties.' + index + '.monthlyRentalIncome', property.monthlyRentalIncome, { min: 0, step: 100 }) +
+      numberField('Selling costs', 'properties.' + index + '.sellingCostsPercent', property.sellingCostsPercent, { dataType: 'percent', min: 0, max: 25, step: 0.1, hint: 'Realtor fees, transfer taxes, closing costs as a percent of sale price.' }) +
+      checkboxField('Primary residence', 'properties.' + index + '.isPrimaryResidence', property.isPrimaryResidence, 'Primary residences get a capital gains exclusion on sale: $250k single / $500k joint.') +
+      numberField('Monthly rental income', 'properties.' + index + '.monthlyRentalIncome', property.monthlyRentalIncome, { min: 0, step: 100, hint: 'Gross rent. Note: operating expenses (taxes, insurance, maintenance, vacancy) are not yet modeled, so enter net rent if accuracy matters.' }) +
       numberField('Rental end year', 'properties.' + index + '.rentalEndYear', property.rentalEndYear, { dataType: 'integer', allowEmpty: true, min: Engine.CURRENT_YEAR, step: 1 }) +
-      numberField('Mortgage balance today', 'properties.' + index + '.mortgageBalanceToday', property.mortgageBalanceToday, { min: 0, step: 1000, hint: 'Used to calculate equity and sale proceeds.' }) +
+      numberField('Mortgage balance today', 'properties.' + index + '.mortgageBalanceToday', property.mortgageBalanceToday, { min: 0, step: 1000, hint: 'Used to calculate equity, amortization, and sale proceeds.' }) +
+      numberField('Mortgage interest rate', 'properties.' + index + '.mortgageInterestRate', property.mortgageInterestRate, { dataType: 'percent', min: 0, max: 30, step: 0.1, hint: 'Annual rate. Used for real amortization — interest is computed each year and the rest of the payment reduces principal.' }) +
       numberField('Monthly mortgage', 'properties.' + index + '.monthlyMortgage', property.monthlyMortgage, { min: 0, step: 100 }) +
       numberField('Mortgage payoff year', 'properties.' + index + '.mortgageEndYear', property.mortgageEndYear, { dataType: 'integer', allowEmpty: true, min: Engine.CURRENT_YEAR, step: 1 }) +
       numberField('Sell year', 'properties.' + index + '.sellAtYear', property.sellAtYear, { dataType: 'integer', allowEmpty: true, min: Engine.CURRENT_YEAR, step: 1, hint: 'Leave blank to keep the property indefinitely.' }) +
@@ -1273,7 +1276,7 @@
         { value: 'income', label: 'Income' },
       ]) +
       textField('Description', 'lifeEvents.' + index + '.description', event.description) +
-      numberField('Amount', 'lifeEvents.' + index + '.amount', event.amount, { min: 0, step: 1000 }) +
+      numberField('Amount', 'lifeEvents.' + index + '.amount', event.amount, { min: 0, step: 1000, hint: 'Entered in the dollars of the event year (not inflation-adjusted).' }) +
       numberField('Year', 'lifeEvents.' + index + '.year', event.year, { dataType: 'integer', min: Engine.CURRENT_YEAR, step: 1 }) +
       '</div>' +
       '</section>'
@@ -1296,15 +1299,17 @@
       '<div class="form-grid">' +
       numberField('Current liquid savings', 'assumptions.startingCashWorth', plan.assumptions.startingCashWorth, { min: 0, step: 1000 }) +
       numberField('Annual expenses today', 'assumptions.startingAnnualExpenses', plan.assumptions.startingAnnualExpenses, { min: 0, step: 1000 }) +
-      numberField('Effective tax rate', 'assumptions.taxRate', plan.assumptions.taxRate, { dataType: 'percent', min: 0, max: 100, step: 0.1, hint: 'Applied to ordinary income. Retirement withdrawals are tax-free.' }) +
-      numberField('Capital gains tax rate', 'assumptions.capitalGainsTaxRate', plan.assumptions.capitalGainsTaxRate, { dataType: 'percent', min: 0, max: 50, step: 0.1, hint: 'Applied to property sale gains only.' }) +
+      numberField('Effective tax rate', 'assumptions.taxRate', plan.assumptions.taxRate, { dataType: 'percent', min: 0, max: 100, step: 0.1, hint: 'Applied to ordinary income (salary, pension, taxable SS, taxable liquid yield, tax-deferred withdrawals, minus deductions).' }) +
+      numberField('Capital gains tax rate', 'assumptions.capitalGainsTaxRate', plan.assumptions.capitalGainsTaxRate, { dataType: 'percent', min: 0, max: 50, step: 0.1, hint: 'Applied to property sale gains after cost basis, selling costs, and primary-residence exclusion.' }) +
+      numberField('Social Security taxable %', 'assumptions.socialSecurityTaxablePercent', plan.assumptions.socialSecurityTaxablePercent, { dataType: 'percent', min: 0, max: 100, step: 1, hint: 'Percent of SS benefits treated as ordinary taxable income. Default 85% matches the IRS maximum for middle+ income retirees.' }) +
+      numberField('Liquid yield taxable %', 'assumptions.liquidTaxableYieldPercent', plan.assumptions.liquidTaxableYieldPercent, { dataType: 'percent', min: 0, max: 100, step: 1, hint: 'Percent of liquid investment return treated as ordinary taxable income each year. Default 30% approximates interest and dividends; the rest is unrealized gains.' }) +
       numberField('Base inflation', 'assumptions.inflationRate', plan.assumptions.inflationRate, { dataType: 'percent', step: 0.1 }) +
       numberField('Expense change age (Person 1)', 'assumptions.expenseChangeAge', plan.assumptions.expenseChangeAge, { dataType: 'integer', allowEmpty: true, min: plan.people[0].currentAge, max: 130, step: 1, hint: 'Use this for kids leaving home, downsizing, or assisted living. Leave blank to disable.' }) +
       numberField('Expense change percent', 'assumptions.expenseChangePercent', plan.assumptions.expenseChangePercent, { dataType: 'percent', min: -100, max: 500, step: 0.1, hint: 'Permanent one-time step change. Negative decreases spending; positive increases it.' }) +
       numberField('Optimistic return', 'assumptions.investmentReturnOptimistic', plan.assumptions.investmentReturnOptimistic, { dataType: 'percent', step: 0.1 }) +
       numberField('Base return', 'assumptions.investmentReturnBase', plan.assumptions.investmentReturnBase, { dataType: 'percent', step: 0.1 }) +
       numberField('Pessimistic return', 'assumptions.investmentReturnPessimistic', plan.assumptions.investmentReturnPessimistic, { dataType: 'percent', step: 0.1 }) +
-      checkboxField('Enable charitable giving', 'assumptions.charitableEnabled', plan.assumptions.charitableEnabled, 'Donations count as cash outflow and as a deduction in the simplified tax model.') +
+      checkboxField('Enable charitable giving', 'assumptions.charitableEnabled', plan.assumptions.charitableEnabled, 'Donations count as cash outflow and as a deduction in the simplified tax model. Fixed amounts inflate automatically.') +
       selectField('Charitable type', 'assumptions.charitableType', plan.assumptions.charitableType, [
         { value: 'amount', label: 'Fixed annual amount' },
         { value: 'percent', label: 'Percent of gross income' },
@@ -1555,7 +1560,6 @@
       return;
     }
 
-    // Give the browser time to render the HTML before triggering print.
     setTimeout(function () {
       try {
         reportWindow.focus();
@@ -1622,10 +1626,14 @@
         id: Date.now(),
         name: 'Property ' + (propertyPlan.properties.length + 1),
         currentValue: 300000,
+        costBasis: 300000,
+        sellingCostsPercent: 0.06,
+        isPrimaryResidence: false,
         appreciationRate: 0.02,
         monthlyRentalIncome: 0,
         rentalEndYear: null,
         mortgageBalanceToday: 0,
+        mortgageInterestRate: 0.05,
         monthlyMortgage: 0,
         mortgageEndYear: null,
         sellAtYear: null,
@@ -1726,12 +1734,30 @@
     }
 
     var focusId = target.id;
+    var selectionStart = null;
+    var selectionEnd = null;
+    try {
+      if (target.selectionStart !== undefined && target.selectionStart !== null) {
+        selectionStart = target.selectionStart;
+        selectionEnd = target.selectionEnd;
+      }
+    } catch (e) {
+      // Some input types don't support selection; ignore.
+    }
+
     applyPlan(nextPlan);
 
-    // Restore focus to the field being edited after re-render.
+    // Restore focus (and cursor position, if applicable) to the edited field.
     var restored = focusId && document.getElementById(focusId);
     if (restored) {
       restored.focus();
+      if (selectionStart !== null && typeof restored.setSelectionRange === 'function') {
+        try {
+          restored.setSelectionRange(selectionStart, selectionEnd);
+        } catch (e) {
+          // Number inputs in some browsers reject setSelectionRange; ignore.
+        }
+      }
     }
   }
 
@@ -1768,9 +1794,6 @@
       return;
     }
 
-    // Debounce text and number keystrokes so users can finish editing
-    // before the app re-renders. Checkboxes, selects, range sliders,
-    // and blur/change events commit immediately.
     var shouldDebounce = event.type === 'input' &&
       (target.type === 'number' || target.type === 'text');
 
@@ -1794,7 +1817,6 @@
     var svg = overlay.closest('svg');
     var cursorLine = svg.querySelector('.chart-cursor-line');
     var tooltipGroup = svg.querySelector('.chart-tooltip-group');
-    var tooltipBg = svg.querySelector('.chart-tooltip-bg');
     var tooltipYear = svg.querySelector('.chart-tooltip-year');
     var tooltipNw = svg.querySelector('.chart-tooltip-nw');
     var tooltipLiq = svg.querySelector('.chart-tooltip-liq');
@@ -1809,10 +1831,10 @@
       scenarioIndex = 1;
     }
 
-    overlay.addEventListener('mousemove', function (event) {
+    function updateTooltipAt(clientX) {
       var rect = svg.getBoundingClientRect();
       var scaleX = chartState.width / rect.width;
-      var mouseX = (event.clientX - rect.left) * scaleX;
+      var mouseX = (clientX - rect.left) * scaleX;
       var relX = mouseX - chartState.padding.left;
       var yearIndex = Math.round(relX / chartState.xSpan * Math.max(1, chartState.pointCount - 1));
       yearIndex = Math.max(0, Math.min(chartState.pointCount - 1, yearIndex));
@@ -1845,12 +1867,29 @@
 
       tooltipGroup.setAttribute('transform', 'translate(' + tooltipX.toFixed(1) + ',' + tooltipY.toFixed(1) + ')');
       tooltipGroup.setAttribute('display', '');
-    });
+    }
 
-    overlay.addEventListener('mouseout', function () {
+    function hideTooltip() {
       cursorLine.setAttribute('display', 'none');
       tooltipGroup.setAttribute('display', 'none');
+    }
+
+    overlay.addEventListener('mousemove', function (event) {
+      updateTooltipAt(event.clientX);
     });
+    overlay.addEventListener('mouseout', hideTooltip);
+    overlay.addEventListener('touchstart', function (event) {
+      if (event.touches[0]) {
+        updateTooltipAt(event.touches[0].clientX);
+      }
+    });
+    overlay.addEventListener('touchmove', function (event) {
+      if (event.touches[0]) {
+        event.preventDefault();
+        updateTooltipAt(event.touches[0].clientX);
+      }
+    }, { passive: false });
+    overlay.addEventListener('touchend', hideTooltip);
   }
 
   function setupIEChartInteraction() {
@@ -1880,10 +1919,10 @@
     var incomeLabels = ['Salary', 'Rental', 'Pension/SS/UBI', 'Investments', 'Retirement wd'];
     var incomeColors = ['#34d399', '#22d3ee', '#a78bfa', '#6366f1', '#14b8a6'];
 
-    overlay.addEventListener('mousemove', function (event) {
+    function updateTooltipAt(clientX) {
       var rect = svg.getBoundingClientRect();
       var scaleX = ieChartState.width / rect.width;
-      var mouseX = (event.clientX - rect.left) * scaleX;
+      var mouseX = (clientX - rect.left) * scaleX;
       var relX = mouseX - ieChartState.pad.left;
       var stride = ieChartState.barWidth + ieChartState.gap;
       var barIndex = Math.round(relX / stride);
@@ -1894,19 +1933,16 @@
         return;
       }
 
-      // Position cursor line at bar center.
       var xCenter = ieChartState.pad.left + barIndex * stride + ieChartState.barWidth * 0.5;
       cursorLine.setAttribute('x1', xCenter.toFixed(1));
       cursorLine.setAttribute('x2', xCenter.toFixed(1));
       cursorLine.setAttribute('display', '');
 
-      // Year/age header.
       var ageStr = row.personStates.map(function (ps) {
         return ps.alive ? ps.age : '—';
       }).join('/');
       ttYear.textContent = row.year + ' (age ' + ageStr + ')';
 
-      // Income components.
       var incomes = [
         Math.max(0, row.salaryIncome),
         Math.max(0, row.rentalIncome),
@@ -1915,7 +1951,6 @@
         Math.max(0, row.retirementWithdrawal),
       ];
 
-      // Fill tooltip lines: show non-zero income components, then expenses.
       var lineIdx = 0;
       for (var ci = 0; ci < incomes.length; ci++) {
         if (incomes[ci] > 0) {
@@ -1925,31 +1960,26 @@
           lineIdx++;
         }
       }
-      // Expenses line.
       if (lineIdx < ttLines.length) {
         ttLines[lineIdx].textContent = 'Expenses: ' + Engine.formatCurrency(row.totalOutflows);
         ttLines[lineIdx].setAttribute('fill', '#f43f5e');
         ttLines[lineIdx].setAttribute('display', '');
         lineIdx++;
       }
-      // Hide remaining lines.
       for (var hi = lineIdx; hi < ttLines.length; hi++) {
         ttLines[hi].setAttribute('display', 'none');
         ttLines[hi].textContent = '';
       }
 
-      // Resize tooltip background to fit visible lines.
       var bgHeight = 26 + lineIdx * 16;
       tooltipBg.setAttribute('height', bgHeight);
 
-      // Reposition text y-coordinates for compactness.
       var yPos = 36;
       for (var ti = 0; ti < lineIdx; ti++) {
         ttLines[ti].setAttribute('y', yPos);
         yPos += 16;
       }
 
-      // Position tooltip.
       var tooltipW = 200;
       var tooltipX = xCenter + 14;
       if (tooltipX + tooltipW > ieChartState.width - ieChartState.pad.right) {
@@ -1959,12 +1989,29 @@
 
       tooltipGroup.setAttribute('transform', 'translate(' + tooltipX.toFixed(1) + ',' + tooltipY.toFixed(1) + ')');
       tooltipGroup.setAttribute('display', '');
-    });
+    }
 
-    overlay.addEventListener('mouseout', function () {
+    function hideTooltip() {
       cursorLine.setAttribute('display', 'none');
       tooltipGroup.setAttribute('display', 'none');
+    }
+
+    overlay.addEventListener('mousemove', function (event) {
+      updateTooltipAt(event.clientX);
     });
+    overlay.addEventListener('mouseout', hideTooltip);
+    overlay.addEventListener('touchstart', function (event) {
+      if (event.touches[0]) {
+        updateTooltipAt(event.touches[0].clientX);
+      }
+    });
+    overlay.addEventListener('touchmove', function (event) {
+      if (event.touches[0]) {
+        event.preventDefault();
+        updateTooltipAt(event.touches[0].clientX);
+      }
+    }, { passive: false });
+    overlay.addEventListener('touchend', hideTooltip);
   }
 
   function render() {

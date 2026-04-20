@@ -112,6 +112,7 @@
           partTimeAge: null,
           partTimeRatio: 0.5,
           retirementBalanceToday: 500000,
+          retirementAccountType: 'taxDeferred',
           retirementContributionType: 'percent',
           retirementContributionAmount: 0.15,
           pensionMonthly: 0,
@@ -133,6 +134,7 @@
           partTimeAge: null,
           partTimeRatio: 0.5,
           retirementBalanceToday: 400000,
+          retirementAccountType: 'taxDeferred',
           retirementContributionType: 'percent',
           retirementContributionAmount: 0.15,
           pensionMonthly: 0,
@@ -149,10 +151,14 @@
           id: 1,
           name: 'Primary home',
           currentValue: 500000,
+          costBasis: 500000,
+          sellingCostsPercent: 0.06,
+          isPrimaryResidence: true,
           appreciationRate: 0.02,
           monthlyRentalIncome: 0,
           rentalEndYear: null,
           mortgageBalanceToday: 0,
+          mortgageInterestRate: 0.05,
           monthlyMortgage: 0,
           mortgageEndYear: null,
           sellAtYear: null,
@@ -174,6 +180,8 @@
         charitableAmount: 5000,
         charitablePercent: 0.05,
         capitalGainsTaxRate: 0.15,
+        socialSecurityTaxablePercent: 0.85,
+        liquidTaxableYieldPercent: 0.30,
       },
       stressTests: createDefaultStressTests(),
     };
@@ -269,6 +277,17 @@
       );
     }
 
+    var hasAccountType = !!(rawPerson && rawPerson.retirementAccountType);
+    var accountType =
+      rawPerson && rawPerson.retirementAccountType === 'roth' ? 'roth' : 'taxDeferred';
+
+    if (rawPerson && !hasAccountType && Number.isFinite(retirementBalanceToday) && retirementBalanceToday > 0) {
+      migrationNotes.push(
+        (rawPerson.name || defaults.name || 'Person ' + (index + 1)) +
+          ': retirement account type was not set. Defaulted to tax-deferred (traditional 401(k)/IRA). Change to Roth if the account is actually after-tax.'
+      );
+    }
+
     return {
       id: toNumber(rawPerson && rawPerson.id, defaults.id || Date.now() + index),
       name: String((rawPerson && rawPerson.name) || defaults.name),
@@ -299,6 +318,7 @@
         1
       ),
       retirementBalanceToday: Math.max(0, retirementBalanceToday),
+      retirementAccountType: accountType,
       retirementContributionType:
         rawPerson && rawPerson.retirementContributionType === 'amount' ? 'amount' : 'percent',
       retirementContributionAmount: Math.max(
@@ -335,11 +355,68 @@
     };
   }
 
-  function normalizeProperty(rawProperty, defaults, index) {
+  function normalizeProperty(rawProperty, defaults, index, migrationNotes, isFirst) {
+    var currentValue = Math.max(
+      0,
+      toNumber(rawProperty && rawProperty.currentValue, defaults.currentValue)
+    );
+
+    var hasCostBasis =
+      rawProperty &&
+      rawProperty.costBasis !== null &&
+      rawProperty.costBasis !== undefined &&
+      rawProperty.costBasis !== '';
+    var costBasis = hasCostBasis
+      ? Math.max(0, toNumber(rawProperty.costBasis, currentValue))
+      : currentValue;
+
+    if (rawProperty && !hasCostBasis && migrationNotes) {
+      migrationNotes.push(
+        (rawProperty.name || defaults.name || 'Property ' + (index + 1)) +
+          ': cost basis was not set. Defaulted to the current value. Update it to the real purchase price plus capital improvements for an accurate capital gains calculation.'
+      );
+    }
+
+    var hasResidenceFlag = !!(rawProperty && typeof rawProperty.isPrimaryResidence === 'boolean');
+    var isPrimaryResidence = hasResidenceFlag
+      ? rawProperty.isPrimaryResidence
+      : !!isFirst;
+
+    var hasMortgageInterest = !!(
+      rawProperty &&
+      rawProperty.mortgageInterestRate !== null &&
+      rawProperty.mortgageInterestRate !== undefined &&
+      rawProperty.mortgageInterestRate !== ''
+    );
+    var mortgageInterestRate = hasMortgageInterest
+      ? clamp(toNumber(rawProperty.mortgageInterestRate, defaults.mortgageInterestRate), 0, 0.3)
+      : defaults.mortgageInterestRate;
+
+    var mortgageBalance = Math.max(
+      0,
+      toNumber(rawProperty && rawProperty.mortgageBalanceToday, defaults.mortgageBalanceToday)
+    );
+
+    if (rawProperty && !hasMortgageInterest && mortgageBalance > 0 && migrationNotes) {
+      migrationNotes.push(
+        (rawProperty.name || defaults.name || 'Property ' + (index + 1)) +
+          ': mortgage interest rate was not set. Defaulted to ' +
+          formatPercent(defaults.mortgageInterestRate) +
+          '. Update it to your actual rate for accurate amortization.'
+      );
+    }
+
     return {
       id: toNumber(rawProperty && rawProperty.id, defaults.id || Date.now() + index),
       name: String((rawProperty && rawProperty.name) || defaults.name || 'Property ' + (index + 1)),
-      currentValue: Math.max(0, toNumber(rawProperty && rawProperty.currentValue, defaults.currentValue)),
+      currentValue: currentValue,
+      costBasis: costBasis,
+      sellingCostsPercent: clamp(
+        toNumber(rawProperty && rawProperty.sellingCostsPercent, defaults.sellingCostsPercent),
+        0,
+        0.25
+      ),
+      isPrimaryResidence: isPrimaryResidence,
       appreciationRate: Math.round(
         clamp(
           toNumber(rawProperty && rawProperty.appreciationRate, defaults.appreciationRate),
@@ -355,10 +432,8 @@
         rawProperty && rawProperty.rentalEndYear !== null && rawProperty.rentalEndYear !== ''
           ? Math.round(toNumber(rawProperty.rentalEndYear, defaults.rentalEndYear || CURRENT_YEAR + 10))
           : null,
-      mortgageBalanceToday: Math.max(
-        0,
-        toNumber(rawProperty && rawProperty.mortgageBalanceToday, defaults.mortgageBalanceToday)
-      ),
+      mortgageBalanceToday: mortgageBalance,
+      mortgageInterestRate: mortgageInterestRate,
       monthlyMortgage: Math.max(
         0,
         toNumber(rawProperty && rawProperty.monthlyMortgage, defaults.monthlyMortgage)
@@ -490,6 +565,22 @@
           0,
           0.5
         ),
+        socialSecurityTaxablePercent: clamp(
+          toNumber(
+            input.assumptions && input.assumptions.socialSecurityTaxablePercent,
+            defaults.assumptions.socialSecurityTaxablePercent
+          ),
+          0,
+          1
+        ),
+        liquidTaxableYieldPercent: clamp(
+          toNumber(
+            input.assumptions && input.assumptions.liquidTaxableYieldPercent,
+            defaults.assumptions.liquidTaxableYieldPercent
+          ),
+          0,
+          1
+        ),
       },
       stressTests: {
         socialSecurityReductionEnabled:
@@ -589,10 +680,10 @@
 
     if (Array.isArray(input.properties)) {
       normalized.properties = input.properties.map(function (property, index) {
-        return normalizeProperty(property, defaults.properties[0], index);
+        return normalizeProperty(property, defaults.properties[0], index, migrationNotes, index === 0);
       });
     } else {
-      normalized.properties = [normalizeProperty(defaults.properties[0], defaults.properties[0], 0)];
+      normalized.properties = [normalizeProperty(defaults.properties[0], defaults.properties[0], 0, null, true)];
     }
 
     normalized.lifeEvents = Array.isArray(input.lifeEvents)
@@ -685,10 +776,30 @@
         });
       }
 
+      if (property.mortgageBalanceToday > 0 && property.monthlyMortgage > 0) {
+        var annualPayment = property.monthlyMortgage * 12;
+        var annualInterest = property.mortgageBalanceToday * property.mortgageInterestRate;
+        if (annualPayment < annualInterest) {
+          messages.push({
+            level: 'warning',
+            text:
+              property.name +
+              ': the monthly mortgage payment is smaller than the annual interest at the given rate. The balance would grow (negative amortization). The engine holds the balance flat as a simplification.',
+          });
+        }
+      }
+
       if (property.sellAtYear && property.rentalEndYear && property.sellAtYear < property.rentalEndYear) {
         messages.push({
           level: 'info',
           text: property.name + ': rental income is scheduled after the sale year and will stop at sale.',
+        });
+      }
+
+      if (property.sellAtYear && property.costBasis > property.currentValue * 2) {
+        messages.push({
+          level: 'info',
+          text: property.name + ': cost basis is much higher than current value, so the sale will show no taxable gain.',
         });
       }
     });
@@ -696,7 +807,7 @@
     if (plan.assumptions.taxRate >= 0.65) {
       messages.push({
         level: 'warning',
-        text: 'The effective tax rate is very high. Stress tests may become overly punitive because retirement withdrawals are also taxed at this rate.',
+        text: 'The effective tax rate is very high. Withdrawals from tax-deferred accounts will also be taxed at this rate.',
       });
     }
 
@@ -827,9 +938,7 @@
     var lastYear = horizonYear(plan);
     var investmentReturn = scenarioInvestmentReturn(plan.assumptions, scenarioKey || 'base');
     var expenseStepYear = expenseChangeYear(plan);
-    // inflationMultiplier starts at 1 (year 0 = today's dollars) and compounds at year-end.
     var inflationMultiplier = 1;
-    // cappedInflationMultiplier tracks COLA for pension/UBI (capped at COLA_CAP).
     var cappedInflationMultiplier = 1;
     var liquidAssets = plan.assumptions.startingCashWorth;
     var retirementBalances = people.map(function (person) {
@@ -949,6 +1058,9 @@
       var retirementContributionTotal = personStates.reduce(function (sum, personState) {
         return sum + personState.contribution;
       }, 0);
+      var taxDeferredContributionTotal = personStates.reduce(function (sum, personState, index) {
+        return people[index].retirementAccountType === 'taxDeferred' ? sum + personState.contribution : sum;
+      }, 0);
       var pensionIncome = personStates.reduce(function (sum, personState) {
         return sum + personState.pensionIncome;
       }, 0);
@@ -961,6 +1073,7 @@
       var liquidInvestmentIncome = roundMoney(Math.max(0, liquidAssets) * investmentReturn);
       var rentalIncome = 0;
       var mortgagePayments = 0;
+      var mortgageInterestPaidTotal = 0;
       var propertySaleProceeds = 0;
       var propertySaleTaxableGain = 0;
       var totalPropertyValue = 0;
@@ -981,6 +1094,7 @@
             equity: 0,
             annualRentalIncome: 0,
             saleProceeds: 0,
+            taxableGain: 0,
           });
           return state;
         }
@@ -1002,23 +1116,41 @@
         var annualMortgagePayment = mortgageActive ? roundMoney(property.monthlyMortgage * 12) : 0;
         mortgagePayments += annualMortgagePayment;
 
-        var appreciatedValue = roundMoney(state.currentValue * (1 + property.appreciationRate));
-        var endRemainingMortgage = state.remainingMortgage;
-
+        // Real amortization: interest first, then principal, cap at payment and at remaining balance.
+        var annualInterest = 0;
+        var principalPaid = 0;
         if (mortgageActive) {
-          var yearsIncludingCurrent = Math.max(1, property.mortgageEndYear - year + 1);
-          var principalReduction = roundMoney(state.remainingMortgage / yearsIncludingCurrent);
-          endRemainingMortgage = year >= property.mortgageEndYear
-            ? 0
-            : Math.max(0, roundMoney(state.remainingMortgage - principalReduction));
+          annualInterest = roundMoney(state.remainingMortgage * property.mortgageInterestRate);
+          mortgageInterestPaidTotal += annualInterest;
+          principalPaid = Math.max(0, annualMortgagePayment - annualInterest);
+          principalPaid = Math.min(principalPaid, state.remainingMortgage);
         }
 
+        var endRemainingMortgage = mortgageActive
+          ? roundMoney(Math.max(0, state.remainingMortgage - principalPaid))
+          : state.remainingMortgage;
+
+        // Force to zero at/past the payoff year even if amortization hasn't caught up.
+        if (property.mortgageEndYear && year >= property.mortgageEndYear) {
+          endRemainingMortgage = 0;
+        }
+
+        var appreciatedValue = roundMoney(state.currentValue * (1 + property.appreciationRate));
         var soldThisYear = !!property.sellAtYear && year === property.sellAtYear;
 
         if (soldThisYear) {
-          var saleProceeds = roundMoney(appreciatedValue - endRemainingMortgage);
+          var sellingCosts = roundMoney(appreciatedValue * property.sellingCostsPercent);
+          var netSaleValue = roundMoney(appreciatedValue - sellingCosts);
+          var realizedGainBeforeExclusion = Math.max(0, roundMoney(netSaleValue - property.costBasis));
+          var exclusion = 0;
+          if (property.isPrimaryResidence) {
+            exclusion = plan.includePerson2 ? 500000 : 250000;
+          }
+          var taxableGain = Math.max(0, roundMoney(realizedGainBeforeExclusion - exclusion));
+          var saleProceeds = roundMoney(netSaleValue - endRemainingMortgage);
+
           propertySaleProceeds += saleProceeds;
-          propertySaleTaxableGain += Math.max(0, roundMoney(appreciatedValue - state.originalValue));
+          propertySaleTaxableGain += taxableGain;
 
           propertySnapshots.push({
             id: state.id,
@@ -1030,6 +1162,7 @@
             equity: 0,
             annualRentalIncome: annualRentalIncome,
             saleProceeds: saleProceeds,
+            taxableGain: taxableGain,
           });
 
           return {
@@ -1054,6 +1187,7 @@
           equity: roundMoney(appreciatedValue - endRemainingMortgage),
           annualRentalIncome: annualRentalIncome,
           saleProceeds: 0,
+          taxableGain: 0,
         });
 
         return {
@@ -1073,7 +1207,7 @@
         charitableDonation =
           plan.assumptions.charitableType === 'percent'
             ? charitableBaseIncome * plan.assumptions.charitablePercent
-            : plan.assumptions.charitableAmount;
+            : plan.assumptions.charitableAmount * inflationMultiplier;
       }
 
       var livingExpensesBase = plan.assumptions.startingAnnualExpenses * inflationMultiplier;
@@ -1099,49 +1233,20 @@
         }
       });
 
-      var ordinaryTaxableIncome = roundMoney(
-        salaryIncome +
-          rentalIncome +
-          pensionIncome +
-          ubiIncome +
-          socialSecurityIncome +
-          liquidInvestmentIncome
-      );
-      // Retirement contributions are after-tax (accounts are modeled as tax-free).
-      var deductions = roundMoney(charitableDonation);
-      var ordinaryTaxes = roundMoney(
-        Math.max(0, ordinaryTaxableIncome - deductions) * plan.assumptions.taxRate
-      );
-      var capitalGainsTaxes = roundMoney(
-        Math.max(0, propertySaleTaxableGain) * plan.assumptions.capitalGainsTaxRate
-      );
-      var taxesBeforeRetirementWithdrawal = roundMoney(ordinaryTaxes + capitalGainsTaxes);
-      var grossInflowsBeforeRetirement = roundMoney(
-        salaryIncome +
-          rentalIncome +
-          pensionIncome +
-          ubiIncome +
-          socialSecurityIncome +
-          liquidInvestmentIncome +
-          propertySaleProceeds +
-          lifeEventIncome
-      );
-      var nonTaxOutflows = roundMoney(
-        livingExpenses + mortgagePayments + charitableDonation + retirementContributionTotal + lifeEventExpense
-      );
-      var cashBeforeRetirementWithdrawal = roundMoney(
-        grossInflowsBeforeRetirement - nonTaxOutflows - taxesBeforeRetirementWithdrawal
-      );
+      // We need to compute taxes, but taxes depend on retirement withdrawals and
+      // retirement withdrawals depend on cash shortfall after taxes. We solve this
+      // in two passes: (1) taxes assuming no discretionary withdrawal beyond RMDs,
+      // (2) sizing discretionary withdrawals to cover any remaining shortfall
+      // including the added tax from those withdrawals.
 
       var retirementAccessibleFlags = personStates.map(function (personState, index) {
         return !personState.alive || personState.age >= people[index].retirementAge;
       });
-      var accessibleRetirementBalance = retirementBalances.reduce(function (sum, balance, index) {
-        return retirementAccessibleFlags[index] ? sum + balance : sum;
-      }, 0);
 
-      // RMDs apply at age 73+ regardless of retirement status.
       var rmdByPerson = people.map(function (person, index) {
+        if (person.retirementAccountType !== 'taxDeferred') {
+          return 0;
+        }
         var age = personStates[index].age;
         if (!personStates[index].alive || age < RMD_START_AGE) {
           return 0;
@@ -1156,36 +1261,147 @@
         return sum + rmd;
       }, 0);
 
+      // taxDeferred RMD portion (all of RMD is taxDeferred by construction)
+      var taxDeferredWithdrawalFromRmd = totalRmd;
+
+      var socialSecurityTaxable = socialSecurityIncome * plan.assumptions.socialSecurityTaxablePercent;
+      var liquidInvestmentTaxable = liquidInvestmentIncome * plan.assumptions.liquidTaxableYieldPercent;
+
+      function ordinaryTaxesFor(taxDeferredWithdrawal) {
+        var ordinaryTaxableIncome =
+          salaryIncome +
+          rentalIncome +
+          pensionIncome +
+          ubiIncome +
+          socialSecurityTaxable +
+          liquidInvestmentTaxable +
+          taxDeferredWithdrawal;
+        var deductions = charitableDonation + taxDeferredContributionTotal;
+        return Math.max(0, ordinaryTaxableIncome - deductions) * plan.assumptions.taxRate;
+      }
+
+      var capitalGainsTaxes = roundMoney(
+        Math.max(0, propertySaleTaxableGain) * plan.assumptions.capitalGainsTaxRate
+      );
+
+      // Pass 1: tax assuming withdrawal = RMD only
+      var pass1Taxes = roundMoney(ordinaryTaxesFor(taxDeferredWithdrawalFromRmd));
+
+      var grossInflowsBeforeRetirement = roundMoney(
+        salaryIncome +
+          rentalIncome +
+          pensionIncome +
+          ubiIncome +
+          socialSecurityIncome +
+          liquidInvestmentIncome +
+          propertySaleProceeds +
+          lifeEventIncome
+      );
+      var nonTaxOutflows = roundMoney(
+        livingExpenses + mortgagePayments + charitableDonation + retirementContributionTotal + lifeEventExpense
+      );
+
       // Start with RMD minimums as baseline withdrawals.
       var retirementWithdrawalsByPerson = rmdByPerson.slice();
 
-      // If a cash shortfall remains after RMDs, withdraw additional from accessible accounts.
-      var cashAfterRmd = roundMoney(cashBeforeRetirementWithdrawal + totalRmd);
+      // Cash after pass-1 taxes with only RMD withdrawals covering the shortfall.
+      var cashAfterRmd = roundMoney(
+        grossInflowsBeforeRetirement + totalRmd - nonTaxOutflows - pass1Taxes - capitalGainsTaxes
+      );
+
+      var finalTaxDeferredWithdrawal = taxDeferredWithdrawalFromRmd;
+      var accessibleRetirementBalance = retirementBalances.reduce(function (sum, balance, index) {
+        return retirementAccessibleFlags[index] ? sum + balance : sum;
+      }, 0);
+
       if (cashAfterRmd < 0 && accessibleRetirementBalance > 0) {
-        var additionalNeeded = Math.abs(cashAfterRmd);
-        var remainingBalances = retirementBalances.map(function (balance, index) {
-          return retirementAccessibleFlags[index] ? Math.max(0, balance - rmdByPerson[index]) : 0;
+        // We need an additional discretionary withdrawal to cover the cash
+        // shortfall. If any portion of that withdrawal comes from a taxDeferred
+        // account, it adds to taxable income and therefore adds to the tax bill,
+        // which means we have to withdraw more to cover that extra tax — the
+        // classic "gross up" problem. Solve it in closed form.
+        var taxRate = plan.assumptions.taxRate;
+        var shortfall = Math.abs(cashAfterRmd);
+
+        // Remaining accessible balances after applying the RMD baseline.
+        var remainingBalances = retirementBalances.map(function (balance, idx) {
+          return retirementAccessibleFlags[idx] ? Math.max(0, balance - rmdByPerson[idx]) : 0;
         });
+        var totalRemaining = remainingBalances.reduce(function (sum, bal) {
+          return sum + bal;
+        }, 0);
+        var taxDeferredRemaining = remainingBalances.reduce(function (sum, bal, idx) {
+          return people[idx].retirementAccountType === 'taxDeferred' ? sum + bal : sum;
+        }, 0);
+        // Fraction of each additional dollar withdrawn that comes from a
+        // taxDeferred account (distributeRetirementWithdrawal splits
+        // proportionally by balance across all accessible accounts).
+        var taxDeferredShare = totalRemaining > 0 ? taxDeferredRemaining / totalRemaining : 0;
+
+        // Baseline taxable income (with only RMDs) and total deductions. Neither
+        // of these depend on the discretionary withdrawal amount.
+        var baseTaxable =
+          salaryIncome +
+          rentalIncome +
+          pensionIncome +
+          ubiIncome +
+          socialSecurityTaxable +
+          liquidInvestmentTaxable +
+          taxDeferredWithdrawalFromRmd;
+        var deductions = charitableDonation + taxDeferredContributionTotal;
+
+        var additionalNeeded;
+        if (taxDeferredShare === 0 || taxRate === 0) {
+          // No tax gross-up applies.
+          additionalNeeded = shortfall;
+        } else {
+          // Figure out how much of the withdrawal (if any) would fit under the
+          // remaining deduction headroom before any tax kicks in.
+          var deductionHeadroom = Math.max(0, deductions - baseTaxable);
+          // Only the taxDeferred portion counts toward using up headroom.
+          var withdrawalToCloseHeadroom =
+            taxDeferredShare > 0 && deductionHeadroom > 0
+              ? deductionHeadroom / taxDeferredShare
+              : 0;
+
+          if (shortfall <= withdrawalToCloseHeadroom) {
+            additionalNeeded = shortfall;
+          } else {
+            // First close the headroom (tax-free), then gross up the remainder.
+            var remainderAfterHeadroom = shortfall - withdrawalToCloseHeadroom;
+            var marginalNetFactor = 1 - taxDeferredShare * taxRate;
+            additionalNeeded =
+              withdrawalToCloseHeadroom + remainderAfterHeadroom / marginalNetFactor;
+          }
+        }
+
+        // Can't withdraw more than what's accessible.
+        additionalNeeded = Math.min(additionalNeeded, totalRemaining);
+
         var additionalWithdrawals = distributeRetirementWithdrawal(
           remainingBalances,
           retirementAccessibleFlags,
           additionalNeeded
         );
-        retirementWithdrawalsByPerson = retirementWithdrawalsByPerson.map(function (rmd, index) {
-          return roundMoney(rmd + additionalWithdrawals[index]);
+        var additionalTaxDeferred = additionalWithdrawals.reduce(function (sum, wd, idx) {
+          return people[idx].retirementAccountType === 'taxDeferred' ? sum + wd : sum;
+        }, 0);
+        retirementWithdrawalsByPerson = retirementWithdrawalsByPerson.map(function (rmd, idx) {
+          return roundMoney(rmd + additionalWithdrawals[idx]);
         });
+        finalTaxDeferredWithdrawal = roundMoney(taxDeferredWithdrawalFromRmd + additionalTaxDeferred);
       }
 
       var retirementWithdrawal = retirementWithdrawalsByPerson.reduce(function (sum, w) {
         return sum + w;
       }, 0);
 
-      // Retirement accounts are modeled as tax-free; no tax on withdrawals.
       retirementBalances = retirementBalances.map(function (balance, index) {
         return roundMoney(balance - retirementWithdrawalsByPerson[index]);
       });
 
-      var totalTaxes = roundMoney(taxesBeforeRetirementWithdrawal);
+      var ordinaryTaxes = roundMoney(ordinaryTaxesFor(finalTaxDeferredWithdrawal));
+      var totalTaxes = roundMoney(ordinaryTaxes + capitalGainsTaxes);
       var grossInflows = roundMoney(grossInflowsBeforeRetirement + retirementWithdrawal);
       var totalOutflows = roundMoney(nonTaxOutflows + totalTaxes);
       var netCashFlow = roundMoney(grossInflows - totalOutflows);
@@ -1199,6 +1415,16 @@
       var totalPropertyEquity = roundMoney(totalPropertyValue - totalMortgageBalance);
       var totalNetWorth = roundMoney(liquidAssets + totalRetirementBalance + totalPropertyEquity);
 
+      var ordinaryTaxableIncomeForReporting = roundMoney(
+        salaryIncome +
+          rentalIncome +
+          pensionIncome +
+          ubiIncome +
+          socialSecurityTaxable +
+          liquidInvestmentTaxable +
+          finalTaxDeferredWithdrawal
+      );
+
       projection.push({
         year: year,
         inflationRateUsed: inflationRate,
@@ -1210,6 +1436,7 @@
             retired: personState.retired,
             salary: personState.salary,
             retirementContribution: personState.contribution,
+            retirementAccountType: people[index].retirementAccountType,
             pensionIncome: personState.pensionIncome,
             ubiIncome: personState.ubiIncome,
             socialSecurityIncome: personState.socialSecurityIncome,
@@ -1221,11 +1448,14 @@
         propertySnapshots: propertySnapshots,
         salaryIncome: roundMoney(salaryIncome),
         retirementContributionTotal: roundMoney(retirementContributionTotal),
+        taxDeferredContributionTotal: roundMoney(taxDeferredContributionTotal),
         rentalIncome: roundMoney(rentalIncome),
         pensionIncome: roundMoney(pensionIncome),
         ubiIncome: roundMoney(ubiIncome),
         socialSecurityIncome: roundMoney(socialSecurityIncome),
+        socialSecurityTaxable: roundMoney(socialSecurityTaxable),
         liquidInvestmentIncome: roundMoney(liquidInvestmentIncome),
+        liquidInvestmentTaxable: roundMoney(liquidInvestmentTaxable),
         propertySaleProceeds: roundMoney(propertySaleProceeds),
         propertySaleTaxableGain: roundMoney(propertySaleTaxableGain),
         lifeEventIncome: roundMoney(lifeEventIncome),
@@ -1236,12 +1466,15 @@
         expenseChangeAge: plan.assumptions.expenseChangeAge,
         expenseChangePercentApplied: expenseChangeActive ? plan.assumptions.expenseChangePercent : 0,
         mortgagePayments: roundMoney(mortgagePayments),
-        deductions: roundMoney(deductions),
-        taxableIncome: roundMoney(ordinaryTaxableIncome + propertySaleTaxableGain),
+        mortgageInterestPaid: roundMoney(mortgageInterestPaidTotal),
+        deductions: roundMoney(charitableDonation + taxDeferredContributionTotal),
+        taxableIncome: roundMoney(ordinaryTaxableIncomeForReporting + propertySaleTaxableGain),
+        ordinaryTaxableIncome: ordinaryTaxableIncomeForReporting,
         ordinaryTaxes: ordinaryTaxes,
         capitalGainsTaxes: capitalGainsTaxes,
         taxes: totalTaxes,
         retirementWithdrawal: roundMoney(retirementWithdrawal),
+        taxDeferredWithdrawal: roundMoney(finalTaxDeferredWithdrawal),
         rmdWithdrawal: roundMoney(totalRmd),
         grossInflows: grossInflows,
         totalOutflows: totalOutflows,
