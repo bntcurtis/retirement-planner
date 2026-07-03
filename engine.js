@@ -182,6 +182,7 @@
         capitalGainsTaxRate: 0.15,
         socialSecurityTaxablePercent: 0.85,
         liquidTaxableYieldPercent: 0.30,
+        investmentVolatility: 0.12,
       },
       stressTests: createDefaultStressTests(),
     };
@@ -581,6 +582,14 @@
           0,
           1
         ),
+        investmentVolatility: clamp(
+          toNumber(
+            input.assumptions && input.assumptions.investmentVolatility,
+            defaults.assumptions.investmentVolatility
+          ),
+          0,
+          0.5
+        ),
       },
       stressTests: {
         socialSecurityReductionEnabled:
@@ -937,6 +946,11 @@
     var people = getIncludedPeople(plan);
     var lastYear = horizonYear(plan);
     var investmentReturn = scenarioInvestmentReturn(plan.assumptions, scenarioKey || 'base');
+    // Optional per-year return path (used by Monte Carlo). Index 0 is the first
+    // projection year; a short array repeats its last value.
+    var returnSequence = Array.isArray(settings.returnSequence) && settings.returnSequence.length
+      ? settings.returnSequence
+      : null;
     var expenseStepYear = expenseChangeYear(plan);
     var inflationMultiplier = 1;
     var cappedInflationMultiplier = 1;
@@ -958,6 +972,9 @@
 
     for (var year = CURRENT_YEAR; year <= lastYear; year += 1) {
       var yearIndex = year - CURRENT_YEAR;
+      var yearReturn = returnSequence
+        ? returnSequence[Math.min(yearIndex, returnSequence.length - 1)]
+        : investmentReturn;
       var inflationRate = inflationRateForYear(plan, year, ignoreStress);
       var socialSecurityFactor = socialSecurityReductionFactor(plan, year, ignoreStress);
       var stressLosses = {
@@ -1042,7 +1059,7 @@
           ubiIncome: roundMoney(ubiIncome),
           socialSecurityIncome: roundMoney(socialSecurityIncome),
           openingRetirementBalance: retirementBalances[index],
-          retirementGrowth: roundMoney(Math.max(0, retirementBalances[index]) * investmentReturn),
+          retirementGrowth: roundMoney(Math.max(0, retirementBalances[index]) * yearReturn),
         };
       });
 
@@ -1070,7 +1087,7 @@
       var socialSecurityIncome = personStates.reduce(function (sum, personState) {
         return sum + personState.socialSecurityIncome;
       }, 0);
-      var liquidInvestmentIncome = roundMoney(Math.max(0, liquidAssets) * investmentReturn);
+      var liquidInvestmentIncome = roundMoney(Math.max(0, liquidAssets) * yearReturn);
       var rentalIncome = 0;
       var mortgagePayments = 0;
       var mortgageInterestPaidTotal = 0;
@@ -1428,6 +1445,9 @@
       projection.push({
         year: year,
         inflationRateUsed: inflationRate,
+        // Cumulative price level for this year relative to today (1 in the first
+        // projection year). Divide any nominal figure by this to get today's dollars.
+        deflator: inflationMultiplier,
         personStates: personStates.map(function (personState, index) {
           return {
             name: people[index].name,
@@ -1572,6 +1592,146 @@
     };
   }
 
+  // Deterministic 32-bit PRNG so the same plan + seed always produces the same
+  // simulation (results are reproducible across runs and machines).
+  function mulberry32(seed) {
+    var t = seed >>> 0;
+    return function () {
+      t = (t + 0x6d2b79f5) >>> 0;
+      var r = t;
+      r = Math.imul(r ^ (r >>> 15), r | 1);
+      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function makeNormalSampler(random) {
+    // Box-Muller transform; caches the second value of each pair.
+    var spare = null;
+    return function () {
+      if (spare !== null) {
+        var value = spare;
+        spare = null;
+        return value;
+      }
+      var u = 0;
+      var v = 0;
+      do {
+        u = random();
+      } while (u <= 1e-12);
+      v = random();
+      var radius = Math.sqrt(-2 * Math.log(u));
+      spare = radius * Math.sin(2 * Math.PI * v);
+      return radius * Math.cos(2 * Math.PI * v);
+    };
+  }
+
+  function percentileOfSorted(sortedValues, q) {
+    if (!sortedValues.length) {
+      return 0;
+    }
+    var position = (sortedValues.length - 1) * q;
+    var lower = Math.floor(position);
+    var upper = Math.min(sortedValues.length - 1, lower + 1);
+    var weight = position - lower;
+    return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+  }
+
+  // Monte Carlo simulation: re-runs the full projection many times with randomized
+  // annual returns (normal around the scenario's average, with the configured
+  // volatility) to expose sequence-of-returns risk that fixed-average scenarios
+  // hide. A trial "succeeds" when liquid assets never go negative — the same
+  // definition as the "first negative liquid year" metric elsewhere in the app.
+  function runMonteCarlo(rawPlan, options) {
+    var settings = options || {};
+    var plan = settings.preMigrated ? rawPlan : migratePlan(rawPlan).plan;
+    var scenarioKey = settings.scenarioKey || 'base';
+    var trials = clamp(Math.round(toNumber(settings.trials, 500)), 10, 10000);
+    var seed = Math.round(toNumber(settings.seed, 20260703));
+    var meanReturn = scenarioInvestmentReturn(plan.assumptions, scenarioKey);
+    var volatility = clamp(
+      toNumber(settings.volatility, plan.assumptions.investmentVolatility),
+      0,
+      0.5
+    );
+    var yearCount = horizonYear(plan) - CURRENT_YEAR + 1;
+    var random = mulberry32(seed);
+    var nextNormal = makeNormalSampler(random);
+
+    var netWorthByYear = [];
+    var yearLabels = [];
+    var successes = 0;
+    var endingNetWorths = [];
+    var trialIndex;
+    var yearIdx;
+
+    for (yearIdx = 0; yearIdx < yearCount; yearIdx += 1) {
+      netWorthByYear.push([]);
+    }
+
+    for (trialIndex = 0; trialIndex < trials; trialIndex += 1) {
+      var returnSequence = [];
+      for (yearIdx = 0; yearIdx < yearCount; yearIdx += 1) {
+        // Clamp so a single simulated year can't lose more than 95%.
+        returnSequence.push(clamp(meanReturn + volatility * nextNormal(), -0.95, 1));
+      }
+
+      var projection = buildProjection(plan, scenarioKey, {
+        preMigrated: true,
+        ignoreStress: !!settings.ignoreStress,
+        returnSequence: returnSequence,
+      });
+
+      var failed = false;
+      for (yearIdx = 0; yearIdx < projection.length; yearIdx += 1) {
+        var row = projection[yearIdx];
+        if (netWorthByYear[yearIdx]) {
+          netWorthByYear[yearIdx].push(row.totalNetWorth);
+        }
+        if (row.endingLiquidAssets < 0) {
+          failed = true;
+        }
+        if (trialIndex === 0) {
+          yearLabels.push(row.year);
+        }
+      }
+      if (!failed) {
+        successes += 1;
+      }
+      endingNetWorths.push(projection[projection.length - 1].totalNetWorth);
+    }
+
+    var bands = { p10: [], p50: [], p90: [] };
+    for (yearIdx = 0; yearIdx < yearCount; yearIdx += 1) {
+      var sorted = netWorthByYear[yearIdx].slice().sort(function (a, b) {
+        return a - b;
+      });
+      bands.p10.push(roundMoney(percentileOfSorted(sorted, 0.1)));
+      bands.p50.push(roundMoney(percentileOfSorted(sorted, 0.5)));
+      bands.p90.push(roundMoney(percentileOfSorted(sorted, 0.9)));
+    }
+
+    var sortedEndings = endingNetWorths.slice().sort(function (a, b) {
+      return a - b;
+    });
+
+    return {
+      scenarioKey: scenarioKey,
+      trials: trials,
+      seed: seed,
+      meanReturn: meanReturn,
+      volatility: volatility,
+      years: yearLabels,
+      bands: bands,
+      successRate: trials > 0 ? successes / trials : 0,
+      endingNetWorth: {
+        p10: roundMoney(percentileOfSorted(sortedEndings, 0.1)),
+        p50: roundMoney(percentileOfSorted(sortedEndings, 0.5)),
+        p90: roundMoney(percentileOfSorted(sortedEndings, 0.9)),
+      },
+    };
+  }
+
   function buildStressPreset(presetKey) {
     var stress = createDefaultStressTests();
 
@@ -1654,6 +1814,7 @@
     validatePlan: validatePlan,
     buildProjection: buildProjection,
     buildScenarioSet: buildScenarioSet,
+    runMonteCarlo: runMonteCarlo,
     summarizeProjection: summarizeProjection,
     currentNetWorth: currentNetWorth,
     householdRetirementYear: householdRetirementYear,

@@ -8,8 +8,22 @@ A static, privacy-first retirement planning app that runs entirely in the browse
 
 - **Scenarios**: Optimistic, Base, and Pessimistic are for long-run average returns.
 - **Stress tests**: Social Security cuts, market crashes, and inflation spikes are overlays because timing matters.
+- **Monte Carlo**: 500 seeded simulations vary each year's return around the scenario average to expose sequence-of-returns risk.
 - **Current net worth**: Cash + retirement balances today + property equity today.
 - **Property equity**: Market value minus mortgage balance.
+
+### Monte Carlo simulation
+
+Fixed-average scenarios hide the main way real retirements fail: a bad run of returns early in retirement. The Overview tab runs 500 simulated market histories for the selected scenario. Each simulation keeps the same average return but redraws every year's return from a normal distribution using the configurable **Return volatility** assumption (default 12%, roughly a balanced portfolio; 15–18% is more stock-heavy).
+
+- **Success rate** — the share of simulations where liquid assets never went negative before the plan horizon (the same failure definition as the "first negative liquid year" metric).
+- **Percentile fan chart** — the 10th–90th percentile band of net worth by year, with the median path.
+- The simulation is seeded, so the same plan always produces the same result.
+- Returns are normally distributed; real markets have fatter tails, so treat the output as a guide rather than a guarantee.
+
+### Future vs. today's dollars
+
+Every chart and table has a **Future $ / Today's $** toggle. Today's dollars divides nominal amounts by cumulative inflation (including any inflation-spike stress), so a figure 30 years out is shown in current purchasing power.
 
 ### Tax model
 
