@@ -21,6 +21,14 @@ Fixed-average scenarios hide the main way real retirements fail: a bad run of re
 - The simulation is seeded, so the same plan always produces the same result.
 - Returns are normally distributed; real markets have fatter tails, so treat the output as a guide rather than a guarantee.
 
+### Sustainable spending solver
+
+Below the Monte Carlo panel, the solver answers "how much can we spend?" — the highest annual expense level (today's dollars) that keeps the simulated success rate at or above a target you pick (80/85/90/95%). It bracket-and-bisects over the expense level, reusing the same seed for every evaluation so results are reproducible, and can apply the solved level straight to the plan.
+
+### Shareable plan links
+
+"Copy share link" (in Plan management on the Edit Inputs tab) packs the entire plan into the URL itself: the JSON is deflate-compressed and base64url-encoded into the fragment (`#plan=v1.…`, typically ~1 KB). URL fragments are never sent to servers, so this stays true to the privacy-first model — there is no upload, no account, no expiry. Anyone opening the link gets their own editable copy; their existing browser draft is only overwritten once they edit something. Browsers without `CompressionStream` fall back to an uncompressed `v0` encoding, and both versions decode on load.
+
 ### Future vs. today's dollars
 
 Every chart and table has a **Future $ / Today's $** toggle. Today's dollars divides nominal amounts by cumulative inflation (including any inflation-spike stress), so a figure 30 years out is shown in current purchasing power.
