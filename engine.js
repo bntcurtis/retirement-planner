@@ -1732,6 +1732,104 @@
     };
   }
 
+  // Sustainable-spending solver: the highest starting annual expense level whose
+  // Monte Carlo success rate stays at or above the chosen threshold. Success
+  // rate is monotonically non-increasing in expenses, so a bracket-then-bisect
+  // search works; every evaluation reuses the SAME seed (common random numbers)
+  // so the search compares like with like and the result is reproducible.
+  function solveSustainableSpending(rawPlan, options) {
+    var settings = options || {};
+    var plan = settings.preMigrated ? rawPlan : migratePlan(rawPlan).plan;
+    var scenarioKey = settings.scenarioKey || 'base';
+    var threshold = clamp(toNumber(settings.threshold, 0.9), 0.5, 0.99);
+    var trials = clamp(Math.round(toNumber(settings.trials, 250)), 10, 10000);
+    var seed = Math.round(toNumber(settings.seed, 20260703));
+    var tolerance = Math.max(100, toNumber(settings.tolerance, 1000));
+    var cap = 10000000;
+    var evaluations = 0;
+
+    function successRateAt(expenses) {
+      var candidate = deepClone(plan);
+      candidate.assumptions.startingAnnualExpenses = roundMoney(Math.max(0, expenses));
+      evaluations += 1;
+      return runMonteCarlo(candidate, {
+        preMigrated: true,
+        scenarioKey: scenarioKey,
+        trials: trials,
+        seed: seed,
+        ignoreStress: !!settings.ignoreStress,
+      }).successRate;
+    }
+
+    var baseline = plan.assumptions.startingAnnualExpenses;
+
+    var zeroRate = successRateAt(0);
+    if (zeroRate < threshold) {
+      return {
+        achievable: false,
+        capped: false,
+        sustainableExpenses: null,
+        successRate: zeroRate,
+        threshold: threshold,
+        scenarioKey: scenarioKey,
+        trials: trials,
+        baselineExpenses: baseline,
+        evaluations: evaluations,
+      };
+    }
+
+    // Bracket: grow the upper bound until the plan fails the threshold (or hits the cap).
+    var low = 0;
+    var lowRate = zeroRate;
+    var high = Math.max(baseline, 20000);
+    var highRate = successRateAt(high);
+    while (highRate >= threshold && high < cap) {
+      low = high;
+      lowRate = highRate;
+      high = Math.min(cap, high * 2);
+      highRate = successRateAt(high);
+    }
+
+    if (highRate >= threshold) {
+      return {
+        achievable: true,
+        capped: true,
+        sustainableExpenses: cap,
+        successRate: highRate,
+        threshold: threshold,
+        scenarioKey: scenarioKey,
+        trials: trials,
+        baselineExpenses: baseline,
+        evaluations: evaluations,
+      };
+    }
+
+    // Bisect [low, high): rate(low) >= threshold > rate(high).
+    while (high - low > tolerance) {
+      var mid = (low + high) / 2;
+      var midRate = successRateAt(mid);
+      if (midRate >= threshold) {
+        low = mid;
+        lowRate = midRate;
+      } else {
+        high = mid;
+      }
+    }
+
+    return {
+      achievable: true,
+      capped: false,
+      // Round down so the reported level never overshoots the verified bound.
+      sustainableExpenses: Math.floor(low / 100) * 100,
+      successRate: lowRate,
+      threshold: threshold,
+      scenarioKey: scenarioKey,
+      trials: trials,
+      baselineExpenses: baseline,
+      evaluations: evaluations,
+    };
+  }
+
   function buildStressPreset(presetKey) {
     var stress = createDefaultStressTests();
 
@@ -1815,6 +1913,7 @@
     buildProjection: buildProjection,
     buildScenarioSet: buildScenarioSet,
     runMonteCarlo: runMonteCarlo,
+    solveSustainableSpending: solveSustainableSpending,
     summarizeProjection: summarizeProjection,
     currentNetWorth: currentNetWorth,
     householdRetirementYear: householdRetirementYear,

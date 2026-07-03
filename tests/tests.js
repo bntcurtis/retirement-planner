@@ -1206,6 +1206,85 @@
           }
         },
       },
+      // ── Sustainable-spending solver ───────────────────────────────
+
+      {
+        name: 'Sustainable-spending solver is deterministic for the same plan and seed',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var first = Engine.solveSustainableSpending(plan, { trials: 80, seed: 5, threshold: 0.8 });
+          var second = Engine.solveSustainableSpending(plan, { trials: 80, seed: 5, threshold: 0.8 });
+          if (first.sustainableExpenses !== second.sustainableExpenses) {
+            throw new Error('Solver results differ across identical runs.');
+          }
+        },
+      },
+      {
+        name: 'Solver solution meets the threshold and sits near the failure boundary',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var result = Engine.solveSustainableSpending(plan, { trials: 100, seed: 11, threshold: 0.85, tolerance: 1000 });
+          if (!result.achievable || result.capped) {
+            throw new Error('Expected an achievable, uncapped solution for the default plan.');
+          }
+          if (result.successRate < 0.85) {
+            throw new Error('Success rate at the solution (' + result.successRate + ') is below the threshold.');
+          }
+
+          function rateAt(expenses) {
+            var probe = Engine.deepClone(plan);
+            probe.assumptions.startingAnnualExpenses = expenses;
+            return Engine.runMonteCarlo(probe, { trials: 100, seed: 11 }).successRate;
+          }
+          // Just above the bisection bracket the plan should fail the threshold.
+          if (rateAt(result.sustainableExpenses + 2100) >= 0.85) {
+            throw new Error('Spending well above the solution still meets the threshold — solver stopped too low.');
+          }
+        },
+      },
+      {
+        name: 'A stricter success threshold never allows more spending',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var relaxed = Engine.solveSustainableSpending(plan, { trials: 80, seed: 21, threshold: 0.7 });
+          var strict = Engine.solveSustainableSpending(plan, { trials: 80, seed: 21, threshold: 0.95 });
+          if (strict.achievable && relaxed.achievable && strict.sustainableExpenses > relaxed.sustainableExpenses) {
+            throw new Error(
+              'Stricter threshold allowed more spending (' +
+              strict.sustainableExpenses + ' > ' + relaxed.sustainableExpenses + ').'
+            );
+          }
+        },
+      },
+      {
+        name: 'Solver reports unachievable when even zero spending fails',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+          // No income or assets, but taxes on nothing are nothing — force failure
+          // with an unavoidable recurring life-event expense.
+          plan.people[0].currentSalary = 0;
+          plan.people[0].retirementBalanceToday = 0;
+          plan.people[0].socialSecurityMonthly = 0;
+          plan.assumptions.startingCashWorth = 1000;
+          plan.properties = [];
+          plan.lifeEvents = [
+            { id: 1, type: 'expense', description: 'Unavoidable', amount: 50000, year: Engine.CURRENT_YEAR + 1 },
+          ];
+
+          var result = Engine.solveSustainableSpending(plan, { trials: 50, seed: 3, threshold: 0.9 });
+          if (result.achievable || result.sustainableExpenses !== null) {
+            throw new Error('Expected the solver to report the threshold as unachievable.');
+          }
+        },
+      },
+
       {
         name: 'Legacy plans without investmentVolatility migrate to the default',
         run: function () {

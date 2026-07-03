@@ -3,6 +3,12 @@
 
   var Engine = window.RetirementEngine;
   var STORAGE_KEY = 'retirement-planner-draft-v2';
+  // Share links carry the whole plan in the URL fragment, so nothing is ever
+  // sent to a server (fragments don't leave the browser). Format:
+  //   #plan=v1.<base64url of deflate-raw JSON>   (compressed)
+  //   #plan=v0.<base64url of UTF-8 JSON>         (fallback for old browsers)
+  // NOTE: initialized before boot() runs — boot reads it at startup.
+  var SHARE_HASH_PREFIX = '#plan=';
   var root = document.getElementById('app');
 
   var state = {
@@ -19,6 +25,17 @@
   // Monte Carlo runs ~500 projections, so cache the result and only recompute
   // when the plan, scenario, or stress configuration actually changes.
   var mcCache = { key: null, result: null };
+
+  // Sustainable-spending solver results stay visible until an input that could
+  // change them does (the key deliberately ignores the expense level itself, so
+  // applying the solved value doesn't wipe the result it came from).
+  var solverState = { threshold: 0.9, result: null, key: null };
+
+  function solverKey() {
+    var planSansExpenses = clone(state.plan);
+    planSansExpenses.assumptions.startingAnnualExpenses = 0;
+    return JSON.stringify(planSansExpenses) + '|' + state.selectedScenario + '|' + solverState.threshold;
+  }
 
   var chartState = {
     projections: null,
@@ -45,12 +62,116 @@
   var debounceTimer = null;
   var DEBOUNCE_MS = 600;
 
-  hydrateDraft();
-  render();
+  boot();
 
   document.addEventListener('click', handleClick);
   document.addEventListener('input', handleInput);
   document.addEventListener('change', handleInput);
+
+  function bytesToBase64Url(bytes) {
+    var binary = '';
+    for (var index = 0; index < bytes.length; index += 1) {
+      binary += String.fromCharCode(bytes[index]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  function base64UrlToBytes(text) {
+    var base64 = text.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+    var binary = atob(base64);
+    var bytes = new Uint8Array(binary.length);
+    for (var index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  function pipeThroughStream(inputBytes, transform) {
+    var stream = new Blob([inputBytes]).stream().pipeThrough(transform);
+    return new Response(stream).arrayBuffer().then(function (buffer) {
+      return new Uint8Array(buffer);
+    });
+  }
+
+  function encodePlanToHash(plan) {
+    var json = JSON.stringify(plan);
+    var rawBytes = new TextEncoder().encode(json);
+    if (typeof CompressionStream === 'function') {
+      return pipeThroughStream(rawBytes, new CompressionStream('deflate-raw')).then(function (compressed) {
+        return SHARE_HASH_PREFIX + 'v1.' + bytesToBase64Url(compressed);
+      });
+    }
+    return Promise.resolve(SHARE_HASH_PREFIX + 'v0.' + bytesToBase64Url(rawBytes));
+  }
+
+  function decodePlanFromHash(hash) {
+    if (!hash || hash.indexOf(SHARE_HASH_PREFIX) !== 0) {
+      return Promise.resolve(null);
+    }
+    var payload = hash.slice(SHARE_HASH_PREFIX.length);
+    var dot = payload.indexOf('.');
+    if (dot < 1) {
+      return Promise.reject(new Error('Malformed share link.'));
+    }
+    var version = payload.slice(0, dot);
+    var bytes = base64UrlToBytes(payload.slice(dot + 1));
+
+    if (version === 'v0') {
+      return Promise.resolve(JSON.parse(new TextDecoder().decode(bytes)));
+    }
+    if (version === 'v1') {
+      if (typeof DecompressionStream !== 'function') {
+        return Promise.reject(new Error('This browser cannot open compressed share links.'));
+      }
+      return pipeThroughStream(bytes, new DecompressionStream('deflate-raw')).then(function (jsonBytes) {
+        return JSON.parse(new TextDecoder().decode(jsonBytes));
+      });
+    }
+    return Promise.reject(new Error('Unknown share link version.'));
+  }
+
+  function boot() {
+    var hash = location.hash;
+    if (!hash || hash.indexOf(SHARE_HASH_PREFIX) !== 0) {
+      hydrateDraft();
+      render();
+      return;
+    }
+
+    decodePlanFromHash(hash)
+      .then(function (sharedPlan) {
+        // Drop the hash so a later reload goes back to the normal draft flow.
+        history.replaceState(null, '', location.pathname + location.search);
+        var migrated = Engine.migratePlan(sharedPlan);
+        state.plan = migrated.plan;
+        state.transientMessages = [
+          {
+            level: 'info',
+            text:
+              'Loaded a plan from the share link. Your previously saved browser draft is untouched until you edit something — use Save JSON first if you want to keep it.',
+          },
+        ].concat(
+          migrated.migrationNotes.map(function (note) {
+            return { level: 'info', text: note };
+          })
+        );
+        render();
+      })
+      .catch(function (error) {
+        history.replaceState(null, '', location.pathname + location.search);
+        hydrateDraft();
+        state.transientMessages = [
+          {
+            level: 'error',
+            text: 'Could not read the plan in that share link' + (error && error.message ? ' (' + error.message + ')' : '') + '.',
+          },
+        ].concat(state.transientMessages || []);
+        render();
+      });
+  }
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -944,8 +1065,96 @@
       '</svg>' +
       '</div>' +
       '<div class="footnote">Annual returns are drawn from a normal distribution and the run is seeded, so the same plan always shows the same result. Adjust &quot;Return volatility&quot; in Edit Inputs (default 12% suits a balanced portfolio; 15–18% is more stock-heavy). Real markets have fatter tails than a normal distribution, so treat this as a guide, not a guarantee.</div>' +
+      renderSpendingSolver() +
       '</div>'
     );
+  }
+
+  function renderSpendingSolver() {
+    var thresholds = [0.8, 0.85, 0.9, 0.95];
+    var result = solverState.result && solverState.key === solverKey() ? solverState.result : null;
+    var resultHtml = '';
+
+    if (result) {
+      if (!result.achievable) {
+        resultHtml =
+          '<ul class="notice-list" style="margin-top:0.8rem"><li class="notice notice--warning">Even $0 of annual spending misses the ' +
+          Math.round(result.threshold * 100) +
+          '% target in this scenario — the gap is structural (income, taxes, or one-time expenses), not lifestyle spending.</li></ul>';
+      } else {
+        var currentExpenses = state.plan.assumptions.startingAnnualExpenses;
+        var delta = result.sustainableExpenses - currentExpenses;
+        var deltaText =
+          Math.abs(delta) < 100
+            ? 'Your plan already spends right at this level.'
+            : delta > 0
+              ? 'That is ' + Engine.formatCurrency(delta) + ' more than your current ' + Engine.formatCurrency(currentExpenses) + '.'
+              : 'That is ' + Engine.formatCurrency(-delta) + ' less than your current ' + Engine.formatCurrency(currentExpenses) + ' — spending would need to come down to hit this target.';
+        resultHtml =
+          '<div class="stat-grid" style="margin-top:0.8rem">' +
+          '<article class="card">' +
+          '<div class="card__label">Max sustainable spending</div>' +
+          '<p class="card__value ' + (delta >= 0 ? 'card__accent' : 'card__accent--amber') + '">' +
+          escapeHtml(Engine.formatCurrency(result.sustainableExpenses)) +
+          (result.capped ? '+' : '') +
+          '</p>' +
+          '<div class="card__foot">Annual, in today&#39;s dollars (grows with inflation). Simulated success ' +
+          escapeHtml(String(Math.round(result.successRate * 100))) +
+          '% at the ' +
+          escapeHtml(String(Math.round(result.threshold * 100))) +
+          '% target, ' +
+          escapeHtml(bundleLabelFor(result.scenarioKey)) +
+          ' scenario. ' +
+          escapeHtml(deltaText) +
+          '</div>' +
+          '</article>' +
+          '</div>' +
+          (Math.abs(delta) >= 100
+            ? '<div class="pill-row" style="margin-top:0.6rem">' +
+              '<button type="button" class="button button--small" data-action="apply-solver-spending" data-value="' +
+              result.sustainableExpenses +
+              '">Set plan expenses to ' +
+              escapeHtml(Engine.formatCurrency(result.sustainableExpenses)) +
+              '</button>' +
+              '</div>'
+            : '');
+      }
+    }
+
+    return (
+      '<div class="section__head" style="margin-top:1.2rem">' +
+      '<div>' +
+      '<h3>Sustainable spending</h3>' +
+      '<p>Answers &quot;how much can we spend?&quot;: the highest annual expense level that keeps the simulated success rate at or above your target. Uses the same seeded simulation as above.</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="pill-row" style="align-items:center">' +
+      '<div class="toggle-group">' +
+      thresholds
+        .map(function (threshold) {
+          return (
+            '<button type="button" class="toggle-group__btn ' +
+            (solverState.threshold === threshold ? 'is-active' : '') +
+            '" data-action="set-solver-threshold" data-value="' +
+            threshold +
+            '">' +
+            Math.round(threshold * 100) +
+            '%</button>'
+          );
+        })
+        .join('') +
+      '</div>' +
+      '<button type="button" class="button button--primary button--small" data-action="run-spending-solver">Solve max spending</button>' +
+      '</div>' +
+      resultHtml
+    );
+  }
+
+  function bundleLabelFor(scenarioKey) {
+    var definition = Engine.scenarioDefinitions().find(function (scenario) {
+      return scenario.key === scenarioKey;
+    });
+    return definition ? definition.label.toLowerCase() : scenarioKey;
   }
 
   function renderOverview(bundle, selectedScenario, unstressedBundle, validationMessages) {
@@ -1625,11 +1834,12 @@
       '<div class="toolbar__group">' +
       '<button type="button" class="button button--primary" data-action="download-json">Save JSON</button>' +
       '<button type="button" class="button" data-action="load-json">Load JSON</button>' +
+      '<button type="button" class="button" data-action="copy-share-link">Copy share link</button>' +
       '<button type="button" class="button" data-action="export-csv">Export CSV</button>' +
       '<button type="button" class="button" data-action="print-report">Print report</button>' +
       '<button type="button" class="button button--danger" data-action="reset-plan">Reset plan</button>' +
       '</div>' +
-      '<div class="footnote">The app also keeps an automatic browser draft. Reset clears the current draft from this browser.</div>' +
+      '<div class="footnote">The app also keeps an automatic browser draft. Reset clears the current draft from this browser. &quot;Copy share link&quot; packs the whole plan into the link itself (compressed, in the URL fragment) — nothing is uploaded anywhere; anyone who opens the link gets their own editable copy.</div>' +
       '</article>' +
       '</section>'
     );
@@ -1869,6 +2079,38 @@
       return;
     }
 
+    if (action === 'set-solver-threshold') {
+      solverState.threshold = Number(actionTarget.dataset.value) || 0.9;
+      render();
+      return;
+    }
+
+    if (action === 'run-spending-solver') {
+      solverState.result = Engine.solveSustainableSpending(state.plan, {
+        scenarioKey: state.selectedScenario,
+        threshold: solverState.threshold,
+      });
+      solverState.key = solverKey();
+      render();
+      return;
+    }
+
+    if (action === 'apply-solver-spending') {
+      var solvedExpenses = Number(actionTarget.dataset.value);
+      if (!Number.isFinite(solvedExpenses) || solvedExpenses < 0) {
+        return;
+      }
+      var solverPlan = clone(state.plan);
+      solverPlan.assumptions.startingAnnualExpenses = solvedExpenses;
+      applyPlan(solverPlan, [
+        {
+          level: 'info',
+          text: 'Annual expenses set to the solved sustainable level: ' + Engine.formatCurrency(solvedExpenses) + '.',
+        },
+      ]);
+      return;
+    }
+
     if (action === 'apply-stress-preset') {
       var preset = actionTarget.dataset.preset;
       if (preset === 'clear') {
@@ -1937,6 +2179,44 @@
 
     if (action === 'download-json') {
       downloadJson();
+      return;
+    }
+
+    if (action === 'copy-share-link') {
+      encodePlanToHash(state.plan)
+        .then(function (hash) {
+          var url = location.href.replace(/#.*$/, '') + hash;
+          var report = function () {
+            state.transientMessages = [
+              {
+                level: 'info',
+                text:
+                  'Share link copied (' +
+                  url.length +
+                  ' characters). The entire plan lives inside the link — nothing is uploaded to any server.',
+              },
+            ];
+            render();
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(url).then(report);
+          }
+          var scratch = document.createElement('textarea');
+          scratch.value = url;
+          scratch.style.position = 'fixed';
+          scratch.style.opacity = '0';
+          document.body.appendChild(scratch);
+          scratch.select();
+          document.execCommand('copy');
+          scratch.remove();
+          report();
+        })
+        .catch(function () {
+          state.transientMessages = [
+            { level: 'warning', text: 'Could not copy the share link in this browser. Use Save JSON instead.' },
+          ];
+          render();
+        });
       return;
     }
 
