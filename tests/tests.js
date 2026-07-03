@@ -1053,6 +1053,171 @@
           }
         },
       },
+
+      // ── Return sequences & deflator ───────────────────────────────
+
+      {
+        name: 'A flat return sequence reproduces the fixed-return projection',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+          plan.assumptions.investmentReturnBase = 0.05;
+
+          var fixed = Engine.buildProjection(plan, 'base');
+          var sequence = fixed.map(function () { return 0.05; });
+          var sequenced = Engine.buildProjection(plan, 'base', { returnSequence: sequence });
+
+          for (var index = 0; index < fixed.length; index += 1) {
+            if (!nearlyEqual(fixed[index].totalNetWorth, sequenced[index].totalNetWorth, 0.01)) {
+              throw new Error(
+                'Year ' + fixed[index].year + ' diverged: ' +
+                fixed[index].totalNetWorth + ' vs ' + sequenced[index].totalNetWorth
+              );
+            }
+          }
+        },
+      },
+      {
+        name: 'A short return sequence repeats its last value',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var flat = Engine.buildProjection(plan, 'base', { returnSequence: [0.04] });
+          var full = Engine.buildProjection(plan, 'base');
+          var sequence = full.map(function () { return 0.04; });
+          var explicit = Engine.buildProjection(plan, 'base', { returnSequence: sequence });
+
+          var last = flat.length - 1;
+          if (!nearlyEqual(flat[last].totalNetWorth, explicit[last].totalNetWorth, 0.01)) {
+            throw new Error('Short sequence did not repeat its last value across the horizon.');
+          }
+        },
+      },
+      {
+        name: 'Projection rows carry a compounding inflation deflator',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+          plan.assumptions.inflationRate = 0.03;
+
+          var projection = Engine.buildProjection(plan, 'base');
+          if (!nearlyEqual(projection[0].deflator, 1, 1e-9)) {
+            throw new Error('First-year deflator should be 1, got ' + projection[0].deflator);
+          }
+          var expected = Math.pow(1.03, 5);
+          if (!nearlyEqual(projection[5].deflator, expected, 1e-9)) {
+            throw new Error('Year-5 deflator should be 1.03^5, got ' + projection[5].deflator);
+          }
+        },
+      },
+
+      // ── Monte Carlo ───────────────────────────────────────────────
+
+      {
+        name: 'Monte Carlo is deterministic for the same plan and seed',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var first = Engine.runMonteCarlo(plan, { trials: 50, seed: 123 });
+          var second = Engine.runMonteCarlo(plan, { trials: 50, seed: 123 });
+
+          if (first.successRate !== second.successRate) {
+            throw new Error('Success rates differ across identical runs.');
+          }
+          if (first.endingNetWorth.p50 !== second.endingNetWorth.p50) {
+            throw new Error('Median ending net worth differs across identical runs.');
+          }
+        },
+      },
+      {
+        name: 'Monte Carlo with zero volatility matches the deterministic projection',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+          plan.assumptions.investmentVolatility = 0;
+
+          var deterministic = Engine.buildProjection(plan, 'base');
+          var lastRow = deterministic[deterministic.length - 1];
+          var simulation = Engine.runMonteCarlo(plan, { trials: 25, seed: 7 });
+
+          if (!nearlyEqual(simulation.endingNetWorth.p50, lastRow.totalNetWorth, 1)) {
+            throw new Error(
+              'Zero-volatility median ' + simulation.endingNetWorth.p50 +
+              ' should equal deterministic ending net worth ' + lastRow.totalNetWorth
+            );
+          }
+          if (!nearlyEqual(simulation.bands.p10[0], simulation.bands.p90[0], 1)) {
+            throw new Error('Zero-volatility percentile bands should collapse to a single line.');
+          }
+
+          var hasDeficit = deterministic.some(function (row) { return row.endingLiquidAssets < 0; });
+          var expectedRate = hasDeficit ? 0 : 1;
+          if (simulation.successRate !== expectedRate) {
+            throw new Error('Zero-volatility success rate should be ' + expectedRate + ', got ' + simulation.successRate);
+          }
+        },
+      },
+      {
+        name: 'Monte Carlo success rate reflects plan health',
+        run: function () {
+          var wealthy = Engine.createDefaultPlan();
+          wealthy.includePerson2 = false;
+          wealthy.assumptions.startingCashWorth = 20000000;
+          wealthy.assumptions.startingAnnualExpenses = 50000;
+
+          var strained = Engine.createDefaultPlan();
+          strained.includePerson2 = false;
+          strained.people[0].currentSalary = 0;
+          strained.people[0].retirementBalanceToday = 100000;
+          strained.people[0].socialSecurityMonthly = 0;
+          strained.assumptions.startingCashWorth = 100000;
+          strained.assumptions.startingAnnualExpenses = 120000;
+
+          var wealthyResult = Engine.runMonteCarlo(wealthy, { trials: 100, seed: 42 });
+          var strainedResult = Engine.runMonteCarlo(strained, { trials: 100, seed: 42 });
+
+          if (wealthyResult.successRate < 0.95) {
+            throw new Error('A heavily overfunded plan should succeed nearly always, got ' + wealthyResult.successRate);
+          }
+          if (strainedResult.successRate > 0.1) {
+            throw new Error('A severely underfunded plan should rarely succeed, got ' + strainedResult.successRate);
+          }
+        },
+      },
+      {
+        name: 'Monte Carlo percentile bands are ordered p10 <= p50 <= p90',
+        run: function () {
+          var plan = Engine.createDefaultPlan();
+          plan.includePerson2 = false;
+
+          var simulation = Engine.runMonteCarlo(plan, { trials: 60, seed: 99 });
+          for (var index = 0; index < simulation.bands.p50.length; index += 1) {
+            if (
+              simulation.bands.p10[index] > simulation.bands.p50[index] ||
+              simulation.bands.p50[index] > simulation.bands.p90[index]
+            ) {
+              throw new Error('Percentile bands crossed at index ' + index + '.');
+            }
+          }
+          if (simulation.years.length !== simulation.bands.p50.length) {
+            throw new Error('Years and band arrays should be the same length.');
+          }
+        },
+      },
+      {
+        name: 'Legacy plans without investmentVolatility migrate to the default',
+        run: function () {
+          var legacy = Engine.createDefaultPlan();
+          delete legacy.assumptions.investmentVolatility;
+
+          var migrated = Engine.migratePlan(legacy).plan;
+          if (!nearlyEqual(migrated.assumptions.investmentVolatility, 0.12, 1e-9)) {
+            throw new Error('Expected default volatility of 0.12, got ' + migrated.assumptions.investmentVolatility);
+          }
+        },
+      },
     ];
   }
 

@@ -12,8 +12,13 @@
     snapshotYear: Engine.CURRENT_YEAR,
     showAllRows: true,
     chartXMode: 'year',
+    dollarMode: 'nominal',
     transientMessages: [],
   };
+
+  // Monte Carlo runs ~500 projections, so cache the result and only recompute
+  // when the plan, scenario, or stress configuration actually changes.
+  var mcCache = { key: null, result: null };
 
   var chartState = {
     projections: null,
@@ -76,6 +81,36 @@
 
     var finalSegment = segments[segments.length - 1];
     cursor[/^\d+$/.test(finalSegment) ? Number(finalSegment) : finalSegment] = value;
+  }
+
+  // Convert a nominal figure to today's dollars when the real-dollar view is on.
+  // `deflator` is the row's cumulative price level (1 in the first projection year).
+  function displayValue(value, deflator) {
+    if (state.dollarMode === 'real' && Number.isFinite(deflator) && deflator > 0) {
+      return value / deflator;
+    }
+    return value;
+  }
+
+  function money(value, deflator) {
+    return Engine.formatCurrency(displayValue(value, deflator));
+  }
+
+  function shortMoney(value, deflator) {
+    return Engine.formatShortCurrency(displayValue(value, deflator));
+  }
+
+  function renderDollarToggle() {
+    return (
+      '<div class="toggle-group" title="Show values as raw future amounts or adjusted for inflation into today\'s purchasing power">' +
+      '<button type="button" class="toggle-group__btn ' +
+      (state.dollarMode === 'nominal' ? 'is-active' : '') +
+      '" data-action="set-dollar-mode" data-mode="nominal">Future $</button>' +
+      '<button type="button" class="toggle-group__btn ' +
+      (state.dollarMode === 'real' ? 'is-active' : '') +
+      '" data-action="set-dollar-mode" data-mode="real">Today&#39;s $</button>' +
+      '</div>'
+    );
   }
 
   function getSnapshotYear(projection) {
@@ -284,6 +319,7 @@
       Engine.SCENARIO_ORDER.map(function (key) {
         var scenario = bundle.scenarios[key];
         var summary = scenario.summary;
+        var horizonRow = scenario.projection[scenario.projection.length - 1];
         var isActive = key === state.selectedScenario;
         return (
           '<button type="button" class="scenario-card ' +
@@ -297,7 +333,7 @@
           escapeHtml(scenario.label) +
           '</span>' +
           '<h4>' +
-          escapeHtml(Engine.formatShortCurrency(summary.horizonNetWorth)) +
+          escapeHtml(shortMoney(summary.horizonNetWorth, horizonRow && horizonRow.deflator)) +
           '</h4>' +
           '<div class="card__sub">Net worth in ' +
           escapeHtml(summary.horizonYear) +
@@ -327,8 +363,8 @@
     var allValues = [Engine.currentNetWorth(state.plan)];
     projections.forEach(function (projection) {
       projection.forEach(function (row) {
-        allValues.push(row.totalNetWorth);
-        allValues.push(row.endingLiquidAssets);
+        allValues.push(displayValue(row.totalNetWorth, row.deflator));
+        allValues.push(displayValue(row.endingLiquidAssets, row.deflator));
       });
     });
     allValues.push(0);
@@ -366,7 +402,7 @@
       return projection
         .map(function (row, index) {
           var prefix = index === 0 ? 'M' : 'L';
-          return prefix + xAt(index).toFixed(1) + ' ' + yAt(row[field]).toFixed(1);
+          return prefix + xAt(index).toFixed(1) + ' ' + yAt(displayValue(row[field], row.deflator)).toFixed(1);
         })
         .join(' ');
     }
@@ -593,12 +629,16 @@
 
     function incomeStack(row) {
       return [
-        Math.max(0, row.salaryIncome),
-        Math.max(0, row.rentalIncome),
-        Math.max(0, row.pensionIncome + row.socialSecurityIncome + row.ubiIncome),
-        Math.max(0, row.liquidInvestmentIncome),
-        Math.max(0, row.retirementWithdrawal),
+        Math.max(0, displayValue(row.salaryIncome, row.deflator)),
+        Math.max(0, displayValue(row.rentalIncome, row.deflator)),
+        Math.max(0, displayValue(row.pensionIncome + row.socialSecurityIncome + row.ubiIncome, row.deflator)),
+        Math.max(0, displayValue(row.liquidInvestmentIncome, row.deflator)),
+        Math.max(0, displayValue(row.retirementWithdrawal, row.deflator)),
       ];
+    }
+
+    function expenseValue(row) {
+      return displayValue(row.totalOutflows, row.deflator);
     }
 
     var maxIncome = 0;
@@ -607,7 +647,7 @@
       var incomes = incomeStack(row);
       var totalIncome = incomes.reduce(function (a, b) { return a + b; }, 0);
       if (totalIncome > maxIncome) { maxIncome = totalIncome; }
-      if (row.totalOutflows > maxExpense) { maxExpense = row.totalOutflows; }
+      if (expenseValue(row) > maxExpense) { maxExpense = expenseValue(row); }
     });
     var maxVal = Math.max(maxIncome, maxExpense, 1);
 
@@ -651,7 +691,7 @@
           '" opacity="0.85" rx="1"></rect>';
       });
 
-      var expH = (row.totalOutflows / maxVal) * ySpan;
+      var expH = (expenseValue(row) / maxVal) * ySpan;
       bars +=
         '<rect x="' + (x + barWidth * 0.52).toFixed(1) +
         '" y="' + (pad.top + ySpan - expH).toFixed(1) +
@@ -699,8 +739,13 @@
       '<div><h3>Income vs. expenses</h3>' +
       '<p>Stacked annual income sources alongside total outflows (' +
       escapeHtml(Engine.scenarioDefinitions().find(function (s) { return s.key === state.selectedScenario; }).label) +
-      ' scenario).</p></div>' +
+      ' scenario' +
+      (state.dollarMode === 'real' ? ', today&#39;s dollars' : '') +
+      ').</p></div>' +
+      '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">' +
+      renderDollarToggle() +
       renderXModeToggle() +
+      '</div>' +
       '</div>' +
       '<div class="chart-legend">' +
       legend.map(function (item) {
@@ -733,15 +778,194 @@
     );
   }
 
+  function getMonteCarloResult() {
+    var cacheKey = JSON.stringify(state.plan) + '|' + state.selectedScenario;
+    if (mcCache.key !== cacheKey) {
+      mcCache.key = cacheKey;
+      mcCache.result = Engine.runMonteCarlo(state.plan, {
+        scenarioKey: state.selectedScenario,
+        trials: 500,
+      });
+    }
+    return mcCache.result;
+  }
+
+  function renderMonteCarlo(selectedScenario) {
+    var simulation = getMonteCarloResult();
+    var projection = selectedScenario.projection;
+    var successPercent = Math.round(simulation.successRate * 100);
+    var successClass =
+      successPercent >= 85 ? 'card__accent' : successPercent >= 60 ? 'card__accent--amber' : 'card__accent--rose';
+    var horizonDeflator = projection.length ? projection[projection.length - 1].deflator : 1;
+
+    // Fan chart: 10th–90th percentile band plus the median path.
+    var width = 960;
+    var height = 300;
+    var padding = { top: 22, right: 26, bottom: 34, left: 78 };
+    var xSpan = width - padding.left - padding.right;
+    var ySpan = height - padding.top - padding.bottom;
+    var pointCount = simulation.years.length;
+
+    function deflatorAt(index) {
+      var row = projection[Math.min(index, projection.length - 1)];
+      return row ? row.deflator : 1;
+    }
+
+    var allValues = [0];
+    ['p10', 'p50', 'p90'].forEach(function (band) {
+      simulation.bands[band].forEach(function (value, index) {
+        allValues.push(displayValue(value, deflatorAt(index)));
+      });
+    });
+    var minValue = Math.min.apply(null, allValues);
+    var maxValue = Math.max.apply(null, allValues);
+    if (minValue === maxValue) {
+      maxValue += 1;
+    }
+
+    function xAt(index) {
+      return padding.left + (index / Math.max(1, pointCount - 1)) * xSpan;
+    }
+
+    function yAt(value) {
+      return padding.top + ((maxValue - value) / (maxValue - minValue)) * ySpan;
+    }
+
+    function bandPath(bandKey) {
+      return simulation.bands[bandKey]
+        .map(function (value, index) {
+          var prefix = index === 0 ? 'M' : 'L';
+          return prefix + xAt(index).toFixed(1) + ' ' + yAt(displayValue(value, deflatorAt(index))).toFixed(1);
+        })
+        .join(' ');
+    }
+
+    // Closed region between p90 (forward) and p10 (reverse).
+    var areaPath = bandPath('p90');
+    for (var backIndex = pointCount - 1; backIndex >= 0; backIndex -= 1) {
+      areaPath +=
+        ' L' + xAt(backIndex).toFixed(1) + ' ' +
+        yAt(displayValue(simulation.bands.p10[backIndex], deflatorAt(backIndex))).toFixed(1);
+    }
+    areaPath += ' Z';
+
+    var gridValues = [0, 0.25, 0.5, 0.75, 1].map(function (stop) {
+      return minValue + (maxValue - minValue) * stop;
+    });
+
+    var xLabelFor = state.chartXMode === 'age'
+      ? function (index) {
+          var row = projection[Math.min(index, projection.length - 1)];
+          return row ? formatAgeLabel(row) : String(simulation.years[index]);
+        }
+      : function (index) {
+          return String(simulation.years[index]);
+        };
+    var midIndex = Math.floor(pointCount / 2);
+
+    return (
+      '<div class="panel chart-card">' +
+      '<div class="chart-header">' +
+      '<div>' +
+      '<h3>Retirement confidence (Monte Carlo)</h3>' +
+      '<p>' +
+      escapeHtml(String(simulation.trials)) +
+      ' simulated market histories for the ' +
+      escapeHtml(selectedScenario.label.toLowerCase()) +
+      ' scenario: same average return (' +
+      escapeHtml(Engine.formatPercent(simulation.meanReturn)) +
+      '), but each year&#39;s return varies with ' +
+      escapeHtml(Engine.formatPercent(simulation.volatility)) +
+      ' volatility. This surfaces sequence-of-returns risk that fixed-average lines hide.</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="stat-grid">' +
+      '<article class="card">' +
+      '<div class="card__label">Success rate</div>' +
+      '<p class="card__value ' + successClass + '">' + successPercent + '%</p>' +
+      '<div class="card__foot">Share of simulations where liquid assets never went negative before the plan horizon.</div>' +
+      '</article>' +
+      '<article class="card">' +
+      '<div class="card__label">Median ending net worth</div>' +
+      '<p class="card__value card__accent--blue">' +
+      escapeHtml(money(simulation.endingNetWorth.p50, horizonDeflator)) +
+      '</p>' +
+      '<div class="card__foot">Half of the simulated outcomes end above this, half below.</div>' +
+      '</article>' +
+      '<article class="card">' +
+      '<div class="card__label">Bad-luck ending (10th pct)</div>' +
+      '<p class="card__value ' +
+      (displayValue(simulation.endingNetWorth.p10, horizonDeflator) >= 0 ? 'card__accent--amber' : 'card__accent--rose') +
+      '">' +
+      escapeHtml(money(simulation.endingNetWorth.p10, horizonDeflator)) +
+      '</p>' +
+      '<div class="card__foot">1 in 10 simulated retirements ended at or below this net worth.</div>' +
+      '</article>' +
+      '</div>' +
+      '<div class="chart-shell">' +
+      '<div class="chart-legend">' +
+      '<span class="legend-chip"><span class="legend-chip__swatch" style="background:rgba(120,185,255,0.35)"></span>10th–90th percentile range</span>' +
+      '<span class="legend-chip"><span class="legend-chip__swatch" style="background:#78b9ff"></span>Median net worth</span>' +
+      '</div>' +
+      '<svg class="chart-svg" viewBox="0 0 ' + width + ' ' + height +
+      '" role="img" aria-label="Monte Carlo net worth percentile bands by year">' +
+      gridValues
+        .map(function (value) {
+          var y = yAt(value);
+          return (
+            '<g>' +
+            '<line x1="' + padding.left + '" x2="' + (width - padding.right) +
+            '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) +
+            '" stroke="rgba(183,207,227,0.12)" stroke-dasharray="4 6"></line>' +
+            '<text x="' + (padding.left - 12) + '" y="' + (y + 4).toFixed(1) +
+            '" fill="#99aaba" text-anchor="end" font-size="12">' +
+            escapeHtml(Engine.formatShortCurrency(value)) +
+            '</text>' +
+            '</g>'
+          );
+        })
+        .join('') +
+      '<line x1="' + padding.left + '" x2="' + (width - padding.right) +
+      '" y1="' + yAt(0).toFixed(1) + '" y2="' + yAt(0).toFixed(1) +
+      '" stroke="rgba(255,139,146,0.45)" stroke-width="2"></line>' +
+      '<path d="' + areaPath + '" fill="rgba(120,185,255,0.18)" stroke="none"></path>' +
+      '<path d="' + bandPath('p10') +
+      '" fill="none" stroke="rgba(120,185,255,0.5)" stroke-width="1.5" stroke-dasharray="5 4"></path>' +
+      '<path d="' + bandPath('p90') +
+      '" fill="none" stroke="rgba(120,185,255,0.5)" stroke-width="1.5" stroke-dasharray="5 4"></path>' +
+      '<path d="' + bandPath('p50') +
+      '" fill="none" stroke="#78b9ff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"></path>' +
+      '<text x="' + padding.left + '" y="' + (height - 10) +
+      '" fill="#99aaba" font-size="11">' + escapeHtml(xLabelFor(0)) + '</text>' +
+      '<text x="' + xAt(midIndex).toFixed(1) + '" y="' + (height - 10) +
+      '" fill="#99aaba" font-size="11" text-anchor="middle">' + escapeHtml(xLabelFor(midIndex)) + '</text>' +
+      '<text x="' + (width - padding.right) + '" y="' + (height - 10) +
+      '" fill="#99aaba" font-size="11" text-anchor="end">' + escapeHtml(xLabelFor(pointCount - 1)) + '</text>' +
+      '</svg>' +
+      '</div>' +
+      '<div class="footnote">Annual returns are drawn from a normal distribution and the run is seeded, so the same plan always shows the same result. Adjust &quot;Return volatility&quot; in Edit Inputs (default 12% suits a balanced portfolio; 15–18% is more stock-heavy). Real markets have fatter tails than a normal distribution, so treat this as a guide, not a guarantee.</div>' +
+      '</div>'
+    );
+  }
+
   function renderOverview(bundle, selectedScenario, unstressedBundle, validationMessages) {
     var summary = selectedScenario.summary;
+    var projectionRows = selectedScenario.projection;
+    var horizonRow = projectionRows[projectionRows.length - 1];
+    var retirementRow = projectionRows.filter(function (row) {
+      return row.year >= summary.householdRetirementYear;
+    })[0] || horizonRow;
     var stressDescriptions = Engine.describeStressTests(state.plan.stressTests);
     var activeStress = Engine.isStressActive(state.plan.stressTests);
     var stressDelta = '';
 
     if (activeStress && unstressedBundle) {
-      var unstressedSummary = unstressedBundle.scenarios[state.selectedScenario].summary;
-      var delta = summary.horizonNetWorth - unstressedSummary.horizonNetWorth;
+      var unstressedScenario = unstressedBundle.scenarios[state.selectedScenario];
+      var unstressedSummary = unstressedScenario.summary;
+      var unstressedHorizonRow = unstressedScenario.projection[unstressedScenario.projection.length - 1];
+      var delta =
+        displayValue(summary.horizonNetWorth, horizonRow && horizonRow.deflator) -
+        displayValue(unstressedSummary.horizonNetWorth, unstressedHorizonRow && unstressedHorizonRow.deflator);
       stressDelta =
         '<div class="card">' +
         '<div class="card__label">Stress impact</div>' +
@@ -793,7 +1017,7 @@
       '<article class="card">' +
       '<div class="card__label">Net worth at household retirement</div>' +
       '<p class="card__value card__accent--blue">' +
-      escapeHtml(Engine.formatCurrency(summary.retirementNetWorth)) +
+      escapeHtml(money(summary.retirementNetWorth, retirementRow && retirementRow.deflator)) +
       '</p>' +
       '<div class="card__foot">Calendar year ' +
       escapeHtml(String(summary.householdRetirementYear)) +
@@ -802,7 +1026,7 @@
       '<article class="card">' +
       '<div class="card__label">Net worth at plan horizon</div>' +
       '<p class="card__value card__accent--amber">' +
-      escapeHtml(Engine.formatCurrency(summary.horizonNetWorth)) +
+      escapeHtml(money(summary.horizonNetWorth, horizonRow && horizonRow.deflator)) +
       '</p>' +
       '<div class="card__foot">Calendar year ' +
       escapeHtml(String(summary.horizonYear)) +
@@ -825,7 +1049,9 @@
       '<div class="chart-header">' +
       '<div>' +
       '<h3>Scenario comparison</h3>' +
-      '<p>Net worth and liquid assets with any active stress tests applied.</p>' +
+      '<p>Net worth and liquid assets with any active stress tests applied' +
+      (state.dollarMode === 'real' ? ', shown in today&#39;s dollars' : '') +
+      '.</p>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">' +
       (stressDescriptions.length
@@ -835,12 +1061,14 @@
             })
             .join('')
         : '<span class="badge">No stress</span>') +
+      renderDollarToggle() +
       renderXModeToggle() +
       '</div>' +
       '</div>' +
       renderScenarioCards(bundle) +
       renderChart(bundle) +
       '</div>' +
+      renderMonteCarlo(selectedScenario) +
       '<div class="panel chart-card">' +
       renderIncomeExpenseChart(selectedScenario.projection) +
       '</div>' +
@@ -872,6 +1100,8 @@
       '<div><strong>Stress tests</strong> — Social Security cuts, market crashes, and inflation spikes are overlays because their timing matters more than their long-run average.</div>' +
       '<div><strong>Tax model</strong> — Each retirement account is either tax-deferred (traditional 401(k)/IRA: contributions deductible, withdrawals taxed) or Roth (contributions after-tax, withdrawals tax-free). Property sale gains use a separate capital gains rate with cost basis, selling costs, and a primary-residence exclusion. Social Security is partially taxable via a configurable percent (default 85%). Liquid investment returns are partially taxable as ordinary income via a configurable yield percent (default 30%).</div>' +
       '<div><strong>RMDs</strong> — Required minimum distributions are enforced at age 73 on tax-deferred accounts only. Roth accounts have no owner RMDs.</div>' +
+      '<div><strong>Monte Carlo</strong> — 500 seeded simulations redraw each year&#39;s investment return from a normal distribution around the selected scenario&#39;s average, using the configurable return volatility. Success means liquid assets never went negative. This exposes sequence-of-returns risk: two futures with the same average return can end very differently depending on when the bad years land.</div>' +
+      '<div><strong>Future vs. today&#39;s dollars</strong> — the Future $/Today&#39;s $ toggle divides nominal amounts by cumulative inflation, so distant-year figures are shown in current purchasing power.</div>' +
       '</div>' +
       '</details>' +
       '</section>'
@@ -884,6 +1114,12 @@
       return row.year === snapshotYear;
     }) || projection[0];
     var maxYear = projection[projection.length - 1].year;
+    var fmt = function (value) {
+      return money(value, snapshot.deflator);
+    };
+    var deflateItem = function (item) {
+      return { label: item.label, value: displayValue(item.value, snapshot.deflator) };
+    };
 
     var inflows = [
       { label: 'Salary', value: snapshot.salaryIncome },
@@ -895,7 +1131,7 @@
       { label: 'Retirement withdrawals', value: snapshot.retirementWithdrawal },
       { label: 'Property sale proceeds', value: snapshot.propertySaleProceeds },
       { label: 'Life event income', value: snapshot.lifeEventIncome },
-    ].filter(function (item) {
+    ].map(deflateItem).filter(function (item) {
       return item.value > 0;
     });
 
@@ -907,7 +1143,7 @@
       { label: 'Retirement contributions', value: snapshot.retirementContributionTotal },
       { label: 'Charitable giving', value: snapshot.charitableDonation },
       { label: 'Life event expense', value: snapshot.lifeEventExpense },
-    ].filter(function (item) {
+    ].map(deflateItem).filter(function (item) {
       return item.value > 0;
     });
 
@@ -915,7 +1151,7 @@
       { label: 'Liquid assets', value: snapshot.endingLiquidAssets },
       { label: 'Retirement accounts', value: snapshot.totalRetirementBalance },
       { label: 'Property equity', value: snapshot.totalPropertyEquity },
-    ].filter(function (item) {
+    ].map(deflateItem).filter(function (item) {
       return item.value !== 0;
     });
 
@@ -925,9 +1161,12 @@
       '<div class="section__head">' +
       '<div>' +
       '<h2>Snapshot</h2>' +
-      '<p>Year-end totals for a single calendar year under the selected scenario.</p>' +
+      '<p>Year-end totals for a single calendar year under the selected scenario' +
+      (state.dollarMode === 'real' ? ', shown in today&#39;s dollars' : '') +
+      '.</p>' +
       '</div>' +
       '<div class="toolbar__group">' +
+      renderDollarToggle() +
       '<label class="field" style="min-width:150px">' +
       '<span class="field__label">Year</span>' +
       '<input type="number" data-path="__snapshotYear" data-type="integer" data-ignore-plan="true" min="' +
@@ -961,13 +1200,13 @@
       '<article class="card">' +
       '<div class="card__label">Gross inflows</div>' +
       '<p class="card__value card__accent">' +
-      escapeHtml(Engine.formatCurrency(snapshot.grossInflows)) +
+      escapeHtml(fmt(snapshot.grossInflows)) +
       '</p>' +
       '</article>' +
       '<article class="card">' +
       '<div class="card__label">Total outflows</div>' +
       '<p class="card__value card__accent--rose">' +
-      escapeHtml(Engine.formatCurrency(snapshot.totalOutflows)) +
+      escapeHtml(fmt(snapshot.totalOutflows)) +
       '</p>' +
       '</article>' +
       '<article class="card">' +
@@ -975,13 +1214,13 @@
       '<p class="card__value ' +
       (snapshot.netCashFlow >= 0 ? 'card__accent--blue' : 'card__accent--rose') +
       '">' +
-      escapeHtml(Engine.formatCurrency(snapshot.netCashFlow)) +
+      escapeHtml(fmt(snapshot.netCashFlow)) +
       '</p>' +
       '</article>' +
       '<article class="card">' +
       '<div class="card__label">Ending net worth</div>' +
       '<p class="card__value card__accent--amber">' +
-      escapeHtml(Engine.formatCurrency(snapshot.totalNetWorth)) +
+      escapeHtml(fmt(snapshot.totalNetWorth)) +
       '</p>' +
       '</article>' +
       '</div>' +
@@ -1016,23 +1255,23 @@
             escapeHtml(personState.retirementAccountType === 'roth' ? 'Roth' : 'Tax-deferred') +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">Salary</span><span>' +
-            escapeHtml(Engine.formatCurrency(personState.salary)) +
+            escapeHtml(fmt(personState.salary)) +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">Pension</span><span>' +
-            escapeHtml(Engine.formatCurrency(personState.pensionIncome)) +
+            escapeHtml(fmt(personState.pensionIncome)) +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">UBI</span><span>' +
-            escapeHtml(Engine.formatCurrency(personState.ubiIncome)) +
+            escapeHtml(fmt(personState.ubiIncome)) +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">Social Security</span><span>' +
-            escapeHtml(Engine.formatCurrency(personState.socialSecurityIncome)) +
+            escapeHtml(fmt(personState.socialSecurityIncome)) +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">Retirement balance</span><span>' +
-            escapeHtml(Engine.formatCurrency(personState.retirementBalance)) +
+            escapeHtml(fmt(personState.retirementBalance)) +
             '</span></div>' +
             '<div class="split-row"><span class="value-muted">Contribution / withdrawal</span><span>' +
             escapeHtml(
-              Engine.formatCurrency(personState.retirementContribution - personState.retirementWithdrawal)
+              fmt(personState.retirementContribution - personState.retirementWithdrawal)
             ) +
             '</span></div>' +
             '</div>'
@@ -1052,26 +1291,26 @@
                 '<div class="property-row__top"><strong>' +
                 escapeHtml(property.name) +
                 '</strong><span>' +
-                escapeHtml(property.sold ? (property.soldThisYear ? 'Sold this year' : 'Sold previously') : Engine.formatCurrency(property.endValue)) +
+                escapeHtml(property.sold ? (property.soldThisYear ? 'Sold this year' : 'Sold previously') : fmt(property.endValue)) +
                 '</span></div>' +
                 (property.sold
                   ? '<div class="split-row"><span class="value-muted">Sale proceeds</span><span>' +
-                    escapeHtml(Engine.formatCurrency(property.saleProceeds)) +
+                    escapeHtml(fmt(property.saleProceeds)) +
                     '</span></div>' +
                     (property.taxableGain > 0
                       ? '<div class="split-row"><span class="value-muted">Taxable gain</span><span>' +
-                        escapeHtml(Engine.formatCurrency(property.taxableGain)) +
+                        escapeHtml(fmt(property.taxableGain)) +
                         '</span></div>'
                       : '')
                   : '<div class="split-row"><span class="value-muted">Remaining mortgage</span><span>' +
-                    escapeHtml(Engine.formatCurrency(property.remainingMortgage)) +
+                    escapeHtml(fmt(property.remainingMortgage)) +
                     '</span></div>' +
                     '<div class="split-row"><span class="value-muted">Equity</span><span>' +
-                    escapeHtml(Engine.formatCurrency(property.equity)) +
+                    escapeHtml(fmt(property.equity)) +
                     '</span></div>') +
                 (property.annualRentalIncome > 0
                   ? '<div class="split-row"><span class="value-muted">Rental income</span><span>' +
-                    escapeHtml(Engine.formatCurrency(property.annualRentalIncome)) +
+                    escapeHtml(fmt(property.annualRentalIncome)) +
                     '</span></div>'
                   : '') +
                 '</div>'
@@ -1094,9 +1333,12 @@
       '<div class="toolbar">' +
       '<div>' +
       '<h2>Data Table</h2>' +
-      '<p class="muted">Year-by-year cash flow and balance detail for the selected scenario.</p>' +
+      '<p class="muted">Year-by-year cash flow and balance detail for the selected scenario' +
+      (state.dollarMode === 'real' ? ', shown in today&#39;s dollars' : '') +
+      '.</p>' +
       '</div>' +
       '<div class="toolbar__group">' +
+      renderDollarToggle() +
       '<button type="button" class="button button--small" data-action="toggle-rows">' +
       escapeHtml(state.showAllRows ? 'Show fewer rows' : 'Show all ' + projection.length + ' rows') +
       '</button>' +
@@ -1138,35 +1380,35 @@
             escapeHtml(ageLabel) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.grossInflows)) +
+            escapeHtml(money(row.grossInflows, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.taxes)) +
+            escapeHtml(money(row.taxes, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.totalOutflows - row.taxes)) +
+            escapeHtml(money(row.totalOutflows - row.taxes, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.retirementWithdrawal)) +
+            escapeHtml(money(row.retirementWithdrawal, row.deflator)) +
             '</td>' +
             '<td class="align-right ' +
             (row.netCashFlow >= 0 ? 'value-positive' : 'value-negative') +
             '">' +
-            escapeHtml(Engine.formatCurrency(row.netCashFlow)) +
+            escapeHtml(money(row.netCashFlow, row.deflator)) +
             '</td>' +
             '<td class="align-right ' +
             (row.endingLiquidAssets >= 0 ? '' : 'value-negative') +
             '">' +
-            escapeHtml(Engine.formatCurrency(row.endingLiquidAssets)) +
+            escapeHtml(money(row.endingLiquidAssets, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.totalRetirementBalance)) +
+            escapeHtml(money(row.totalRetirementBalance, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.totalPropertyEquity)) +
+            escapeHtml(money(row.totalPropertyEquity, row.deflator)) +
             '</td>' +
             '<td class="align-right">' +
-            escapeHtml(Engine.formatCurrency(row.totalNetWorth)) +
+            escapeHtml(money(row.totalNetWorth, row.deflator)) +
             '</td>' +
             '</tr>'
           );
@@ -1309,6 +1551,7 @@
       numberField('Optimistic return', 'assumptions.investmentReturnOptimistic', plan.assumptions.investmentReturnOptimistic, { dataType: 'percent', step: 0.1 }) +
       numberField('Base return', 'assumptions.investmentReturnBase', plan.assumptions.investmentReturnBase, { dataType: 'percent', step: 0.1 }) +
       numberField('Pessimistic return', 'assumptions.investmentReturnPessimistic', plan.assumptions.investmentReturnPessimistic, { dataType: 'percent', step: 0.1 }) +
+      numberField('Return volatility', 'assumptions.investmentVolatility', plan.assumptions.investmentVolatility, { dataType: 'percent', min: 0, max: 50, step: 0.5, hint: 'Standard deviation of annual returns used by the Monte Carlo simulation on the Overview tab. ~12% suits a balanced portfolio; 15–18% is more stock-heavy.' }) +
       checkboxField('Enable charitable giving', 'assumptions.charitableEnabled', plan.assumptions.charitableEnabled, 'Donations count as cash outflow and as a deduction in the simplified tax model. Fixed amounts inflate automatically.') +
       selectField('Charitable type', 'assumptions.charitableType', plan.assumptions.charitableType, [
         { value: 'amount', label: 'Fixed annual amount' },
@@ -1430,6 +1673,23 @@
       escapeHtml(summary.firstDeficitYear ? String(summary.firstDeficitYear) : 'None') +
       '</div></div>' +
       '</div>' +
+      '<h2>Monte Carlo</h2>' +
+      (function () {
+        var simulation = getMonteCarloResult();
+        return (
+          '<p class="small">' +
+          escapeHtml(String(simulation.trials)) +
+          ' simulated market histories (' +
+          escapeHtml(Engine.formatPercent(simulation.volatility)) +
+          ' annual volatility around the scenario average): <strong>' +
+          escapeHtml(String(Math.round(simulation.successRate * 100))) +
+          '% success rate</strong> (liquid assets never went negative), median ending net worth ' +
+          escapeHtml(Engine.formatCurrency(simulation.endingNetWorth.p50)) +
+          ', 10th percentile ' +
+          escapeHtml(Engine.formatCurrency(simulation.endingNetWorth.p10)) +
+          '.</p>'
+        );
+      })() +
       '<h2>Stress tests</h2>' +
       (notes.length
         ? notes.map(function (note) { return '<span class="badge">' + escapeHtml(note) + '</span>'; }).join('')
@@ -1599,6 +1859,12 @@
 
     if (action === 'set-chart-x-mode') {
       state.chartXMode = actionTarget.dataset.mode;
+      render();
+      return;
+    }
+
+    if (action === 'set-dollar-mode') {
+      state.dollarMode = actionTarget.dataset.mode;
       render();
       return;
     }
@@ -1855,9 +2121,9 @@
       }).join('/');
 
       tooltipYear.textContent = row.year + ' (age ' + ageLabel + ')';
-      tooltipNw.textContent = 'Net worth: ' + Engine.formatCurrency(row.totalNetWorth);
-      tooltipLiq.textContent = 'Liquid: ' + Engine.formatCurrency(row.endingLiquidAssets);
-      tooltipRet.textContent = 'Retirement: ' + Engine.formatCurrency(row.totalRetirementBalance);
+      tooltipNw.textContent = 'Net worth: ' + money(row.totalNetWorth, row.deflator);
+      tooltipLiq.textContent = 'Liquid: ' + money(row.endingLiquidAssets, row.deflator);
+      tooltipRet.textContent = 'Retirement: ' + money(row.totalRetirementBalance, row.deflator);
 
       var tooltipX = xPos + 14;
       if (tooltipX + 200 > chartState.width - chartState.padding.right) {
@@ -1944,11 +2210,11 @@
       ttYear.textContent = row.year + ' (age ' + ageStr + ')';
 
       var incomes = [
-        Math.max(0, row.salaryIncome),
-        Math.max(0, row.rentalIncome),
-        Math.max(0, row.pensionIncome + row.socialSecurityIncome + row.ubiIncome),
-        Math.max(0, row.liquidInvestmentIncome),
-        Math.max(0, row.retirementWithdrawal),
+        Math.max(0, displayValue(row.salaryIncome, row.deflator)),
+        Math.max(0, displayValue(row.rentalIncome, row.deflator)),
+        Math.max(0, displayValue(row.pensionIncome + row.socialSecurityIncome + row.ubiIncome, row.deflator)),
+        Math.max(0, displayValue(row.liquidInvestmentIncome, row.deflator)),
+        Math.max(0, displayValue(row.retirementWithdrawal, row.deflator)),
       ];
 
       var lineIdx = 0;
@@ -1961,7 +2227,7 @@
         }
       }
       if (lineIdx < ttLines.length) {
-        ttLines[lineIdx].textContent = 'Expenses: ' + Engine.formatCurrency(row.totalOutflows);
+        ttLines[lineIdx].textContent = 'Expenses: ' + Engine.formatCurrency(displayValue(row.totalOutflows, row.deflator));
         ttLines[lineIdx].setAttribute('fill', '#f43f5e');
         ttLines[lineIdx].setAttribute('display', '');
         lineIdx++;
