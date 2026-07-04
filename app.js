@@ -20,6 +20,10 @@
     chartXMode: 'year',
     dollarMode: 'nominal',
     transientMessages: [],
+    // Content keys of notes the user has dismissed. Kept in memory only (not
+    // saved with the plan). Pruned each render to keys still being generated, so
+    // a fixed-then-recurring condition warns again instead of staying hidden.
+    dismissedNotices: [],
   };
 
   // Monte Carlo runs ~500 projections, so cache the result and only recompute
@@ -405,20 +409,53 @@
     );
   }
 
+  function noticeKey(message) {
+    return message.level + '|' + message.text;
+  }
+
   function renderMessages(messages) {
-    if (!messages.length) {
+    // Prune dismissals to only notes present in this render. Validation notes are
+    // regenerated from the plan every render, so this keeps the dismissed set
+    // honest: fixing an issue drops its key, and if the issue later recurs the
+    // note reappears rather than staying permanently hidden.
+    var present = {};
+    messages.forEach(function (message) {
+      present[noticeKey(message)] = true;
+    });
+    state.dismissedNotices = state.dismissedNotices.filter(function (key) {
+      return present[key];
+    });
+
+    var dismissed = {};
+    state.dismissedNotices.forEach(function (key) {
+      dismissed[key] = true;
+    });
+    var visible = messages.filter(function (message) {
+      return !dismissed[noticeKey(message)];
+    });
+
+    if (!visible.length) {
       return '';
     }
 
+    var header =
+      visible.length > 1
+        ? '<div class="notice-block__head"><button type="button" class="notice-dismiss-all" data-action="dismiss-all-notices">Dismiss all ' +
+          visible.length +
+          ' notes</button></div>'
+        : '';
+
     return (
+      '<div class="notice-block">' +
+      header +
       '<ul class="notice-list">' +
-      messages
+      visible
         .map(function (message) {
           return (
             '<li class="notice notice--' +
             escapeHtml(message.level) +
             '">' +
-            '<div>' +
+            '<div class="notice__body">' +
             '<strong>' +
             escapeHtml(message.level === 'error' ? 'Check this' : message.level === 'warning' ? 'Review this' : 'Note') +
             '</strong>' +
@@ -426,11 +463,15 @@
             escapeHtml(message.text) +
             '</div>' +
             '</div>' +
+            '<button type="button" class="notice-dismiss" data-action="dismiss-notice" data-key="' +
+            escapeHtml(noticeKey(message)) +
+            '" aria-label="Dismiss this note" title="Dismiss">&times;</button>' +
             '</li>'
           );
         })
         .join('') +
-      '</ul>'
+      '</ul>' +
+      '</div>'
     );
   }
 
@@ -2061,6 +2102,28 @@
       return;
     }
 
+    if (action === 'dismiss-notice') {
+      var noticeToDismiss = actionTarget.dataset.key;
+      if (noticeToDismiss && state.dismissedNotices.indexOf(noticeToDismiss) === -1) {
+        state.dismissedNotices.push(noticeToDismiss);
+      }
+      render();
+      return;
+    }
+
+    if (action === 'dismiss-all-notices') {
+      // Dismiss everything currently shown. Transient messages are already cleared
+      // by the previous render, so the live set is the plan's validation notes.
+      Engine.validatePlan(state.plan).concat(state.transientMessages).forEach(function (message) {
+        var key = noticeKey(message);
+        if (state.dismissedNotices.indexOf(key) === -1) {
+          state.dismissedNotices.push(key);
+        }
+      });
+      render();
+      return;
+    }
+
     if (action === 'toggle-rows') {
       state.showAllRows = !state.showAllRows;
       render();
@@ -2250,6 +2313,7 @@
       state.transientMessages = [{ level: 'info', text: 'Plan reset to defaults.' }];
       state.snapshotYear = Engine.CURRENT_YEAR;
       state.showAllRows = false;
+      state.dismissedNotices = [];   // a fresh plan starts with a clean slate of notes
       render();
       return;
     }
@@ -2315,6 +2379,7 @@
       reader.onload = function (readerEvent) {
         try {
           var loaded = JSON.parse(readerEvent.target.result);
+          state.dismissedNotices = [];   // a freshly loaded plan starts with a clean slate of notes
           applyPlan(loaded, [{ level: 'info', text: 'Loaded plan from file.' }]);
         } catch (error) {
           state.transientMessages = [

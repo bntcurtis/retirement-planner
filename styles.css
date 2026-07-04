@@ -483,6 +483,60 @@ td {
   background: rgba(18, 42, 65, 0.34);
 }
 
+.notice__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-dismiss {
+  flex: none;
+  align-self: flex-start;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin: -0.18rem -0.25rem 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.notice-dismiss:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.notice-block__head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.notice-dismiss-all {
+  border: 0;
+  background: transparent;
+  color: #99aaba;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  opacity: 0.9;
+  padding: 0.1rem 0.25rem;
+}
+
+.notice-dismiss-all:hover {
+  opacity: 1;
+  color: #cdd8e3;
+  text-decoration: underline;
+}
+
 .form-card,
 .data-card,
 .snapshot-card {
@@ -1015,6 +1069,9 @@ td {
   .button--danger,
   .button--ghost,
   .toggle-group,
+  .notice-dismiss,
+  .notice-dismiss-all,
+  .notice-block__head,
   input[type="file"],
   .chart-overlay,
   .ie-chart-overlay,
