@@ -89,6 +89,10 @@ Use your browser's print dialog (Ctrl+P / Cmd+P). A print-specific stylesheet co
 - You can also save a plan as JSON and load it later.
 - Legacy plans from older versions are migrated forward. Migration notes appear in the UI when assumptions are inferred — review them before trusting the projection.
 
+### Notes and validation warnings
+
+The Overview and Edit Inputs tabs surface advisory notes (migration notes plus live validation warnings such as an unusually high tax rate or a mortgage with no payoff year). Each note can be dismissed with its ✕, or cleared together with **Dismiss all**. Dismissals are not permanent: they are tracked only while the underlying condition holds, so if you fix an issue and later reintroduce it the warning returns rather than staying hidden. Loading or resetting a plan starts with a clean slate.
+
 ## Tests
 
 **In a browser:** open `tests/index.html`.
